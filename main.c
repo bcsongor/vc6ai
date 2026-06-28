@@ -32,7 +32,7 @@ static FILE *fdbg_tools;
 static void dbg(FILE **fp, const char *filename, const char *fmt, ...) {
     va_list args;
 
-    if (!*fp) *fp = fopen(filename, "a");    
+    if (!*fp) *fp = fopen(filename, "a");
     
     va_start(args, fmt);
     vfprintf(*fp, fmt, args);
@@ -67,7 +67,7 @@ void config_init(struct config_t *config, const char *ini_file) {
 
     GetPrivateProfileStringA("OpenRouter", "ApiKey", "", config->api_key, sizeof(config->api_key), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, sizeof(config->model), ini_path);
-    GetPrivateProfileStringA("OpenRouter", "Provider", NULL, config->provider, sizeof(config->provider), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "Provider", "", config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 1, ini_path);
 }
@@ -272,7 +272,7 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    sprintf(out + outlen, "\n[exit %lu]\n", exitcode);
+    sprintf(out + outlen, "\n[exit %lu]", exitcode);
 
     return out;
 }
@@ -372,7 +372,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     // add provider section
     provider = cJSON_CreateObject();
     cJSON_AddBoolToObject(provider, "zdr", config->zdr ? cJSON_True : cJSON_False); // zero data retention
-    if (config->provider) {
+    if (strlen(config->provider)) {
         cJSON *order = cJSON_CreateArray();
         cJSON_AddItemToArray(order, cJSON_CreateString(config->provider));
         cJSON_AddItemToObject(provider, "order", order);
@@ -614,7 +614,7 @@ int main(int argc, char **argv) {
     term_color(C_FG_DARK_GRAY);
     printf("  available commands: /model, /new, /exit\n");
     
-    http_init(&http, 30L);
+    http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);
     
     convo_init(&convo, &config, tools);

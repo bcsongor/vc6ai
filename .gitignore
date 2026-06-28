@@ -7,6 +7,10 @@ Release/
 *.opt
 *.plg
 *.wwdb
+*.positions
 
 # Config
 vc6ai.ini
+
+# Logs
+*.log

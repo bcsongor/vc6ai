@@ -10,20 +10,37 @@
 
 #pragma comment(lib, "libcurl")
 
-#define DEBUG
+#define DEBUG_REQUESTS
+#define DEBUG_TOOLS
 
-#ifdef DEBUG
-    static FILE *fdbg;
-    void dbg(const char *fmt, ...) {
-        va_list args;
-        if (!fdbg) fdbg = fopen("debug.txt", "a");
-        va_start(args, fmt);
-        vfprintf(fdbg, fmt, args);
-        va_end(args);
-        fprintf(fdbg, "-------------------------------------------------------------------------------\n");
-    }
-#else
-    void dbg(const char *fmt, ...) {}
+
+//////////////////////////////////////////////////////////////////////////
+//
+// DEBUGGING
+
+#ifdef DEBUG_REQUESTS
+static FILE *fdbg_reqs;
+#define DBG_REQ(fmt, a) dbg(&fdbg_reqs, "requests.log", fmt, a)
+#endif
+
+#ifdef DEBUG_TOOLS
+static FILE *fdbg_tools;
+#define DBG_TOOL(fmt, a, b) dbg(&fdbg_tools, "tool_calls.log", fmt, a, b)
+#endif
+
+#if defined(DEBUG_REQUESTS) || defined(DEBUG_TOOLS)
+static void dbg(FILE **fp, const char *filename, const char *fmt, ...) {
+    va_list args;
+
+    if (!*fp) *fp = fopen(filename, "a");    
+    
+    va_start(args, fmt);
+    vfprintf(*fp, fmt, args);
+    va_end(args);
+
+    fprintf(*fp, "-------------------------------------------------------------------------------\n");
+    fflush(*fp);
+}
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -31,22 +48,26 @@
 // CONFIGURATION
 
 struct config_t {
-    char openrouter_api_key[255];
-    char openrouter_model[255];
+    char cwd[MAX_PATH];
+    // OpenRouter config
+    char api_key[255];
+    char model[255];
+    char effort[12]; // max, xhigh, high, medium, low, minimial, none
+    int zdr;
 };
 
 const char *ini_file = "vc6ai.ini";
 
 void config_init(struct config_t *config, const char *ini_file) {
-    char cwd[MAX_PATH], ini_path[MAX_PATH];
+    char ini_path[MAX_PATH];
+    
+    GetCurrentDirectoryA(MAX_PATH, config->cwd);
+    _snprintf(ini_path, MAX_PATH, "%s\\%s", config->cwd, ini_file);
 
-    GetCurrentDirectoryA(MAX_PATH, cwd);
-    _snprintf(ini_path, MAX_PATH, "%s\\%s", cwd, ini_file);
-
-    GetPrivateProfileStringA("OpenRouter", "ApiKey", "",
-        config->openrouter_api_key, sizeof(config->openrouter_api_key), ini_path);
-    GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash",
-        config->openrouter_model, sizeof(config->openrouter_model), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "ApiKey", "", config->api_key, sizeof(config->api_key), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, sizeof(config->model), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
+    config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 1, ini_path);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -54,10 +75,16 @@ void config_init(struct config_t *config, const char *ini_file) {
 // TERMINAL
 
 enum term_color {
-    C_DARK_GRAY = FOREGROUND_INTENSITY,
-    C_TURQUOISE = (FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY),
-    C_RED = (FOREGROUND_RED | FOREGROUND_INTENSITY),
-    C_WHITE = (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY)
+    // foreground
+    C_FG_DARK_GRAY = FOREGROUND_INTENSITY,
+    C_FG_TURQUOISE = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    C_FG_RED       = FOREGROUND_RED | FOREGROUND_INTENSITY,
+    C_FG_PURPLE    = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    C_FG_WHITE     = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    // background
+    C_BG_DARK_BLUE   = BACKGROUND_BLUE,
+    C_BG_DARK_PURPLE = BACKGROUND_RED | BACKGROUND_BLUE,
+    C_BG_DARK_RED    = BACKGROUND_RED
 };
 
 static HANDLE term_handle;
@@ -162,42 +189,22 @@ const struct tool_params_t run_cmd_params[] = {
     {
         "command",
         "string",
-        /*
-        // general 
-        "Exact command to pass to Windows XP cmd.exe /C. "
-        "The tool captures stdout and stderr automatically. "
-        "Use one complete command; combine related steps with && to avoid extra tool calls. "
-        "Use call \"file.bat\" when running a batch file before another command. "
-        // file writing
-        "For writing files, prefer one parenthesised block: "
-        "(echo line1&echo line2&echo line3)>file.ext. "
-        "Escape cmd metacharacters only inside echoed file content: ^< ^> ^| ^& ^( ^). "
-        "Do not escape the final > or >> redirection operator used to write the file. "
-        // internet access
-        "curl.exe may be used for internet access. "
-        // C code generation
-        "When generating C to compile with cl/VC6, use C89-compatible C: "
-        "declare variables at the start of a block, do not declare variables inside for loops, "
-        "use int main(void), avoid // comments and avoid C99 features. "
-        // command length 
-        "Keep commands under about 4000 characters. "
-        "For larger files, write them in several append blocks instead of one huge command.",*/
-
         // general
         "Exact command to pass to Windows XP cmd.exe /C. "
         "The tool captures stdout and stderr automatically. "
         "Use one complete command; combine related steps with && to avoid extra tool calls. "
         "Do not use PowerShell, Python, package managers, or newer Windows-only utilities. "
         "Use call \"file.bat\" when running a batch file before another command. "
+        "Keep commands under about 4000 characters. "
+        "For larger files, write them in several append blocks instead of one huge command."
         // file manipluation via perl
         "perl.exe is available and should always be used for creating, replacing, or editing text files. "
         "For whole-file writes, use perl.exe with open/print/close. "
+        "For whole-file writes, prefer perl.exe print statements using chr(10) for newlines. "
+        "Do not use \\n inside single-quoted Perl strings; Perl will write it literally. "
         "For edits, use perl.exe -0777 for whole-file search/replace, usually with -pi.bak. "
         // internet access via curl
-        "curl.exe is available for internet access. "
-        // writing C code
-        "When generating C to compile with cl/VC6, use C89-compatible C: declare variables at the start of a block, "
-        "do not declare variables inside for loops, use int main(void), avoid // comments and avoid C99 features.",
+        "curl.exe is available for internet access.",
         1
     },
     {NULL, NULL, NULL, 0}
@@ -213,56 +220,79 @@ const struct tool_t tools[] = {
     {NULL, NULL, NULL}
 };
 
-char *tool_handle_run_cmd(const char *cmd) {
-    char buf[1024], *out, *wrapped;
-    size_t outsize = 4096, outlen = 0, buflen = 0, wrapped_size;
-    FILE *f;
-    
-    // wrap command to capture stderr
-    // TODO: maybe change to CreateProcessA for proper stderr support?
-    wrapped_size = strlen(cmd) + 32;
-    wrapped = malloc(wrapped_size);
-    _snprintf(wrapped, wrapped_size, "cmd.exe /C %s 2>&1", cmd);
-    wrapped[wrapped_size - 1] = '\0';
+char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
+    HANDLE rd = NULL, wr = NULL;
+    STARTUPINFO si = {0};
+    PROCESS_INFORMATION pi = {0};
+    char *cmdline, buf[1024], *out;
+    size_t outsize = 4096, outlen = 0;
+    DWORD readlen, exitcode;
+    BOOL ok;
 
-    f = _popen(wrapped, "r");
-    free(wrapped);
-    if (!f) return NULL;
+    ok = CreatePipe(&rd, &wr, &sa, 0);
+    if (!ok) return strdup("CreatePipe failed\n");
+
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = wr;
+    si.hStdError = wr;
+
+    cmdline = malloc(strlen(cmd) + 16);
+    sprintf(cmdline, "cmd.exe /C %s", cmd);
+
+    ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi);
+    free(cmdline);
+    CloseHandle(wr);
+    if (!ok) {
+        sprintf(buf, "CreateProcessA failed: %d\n", GetLastError());
+        CloseHandle(rd);
+        return strdup(buf);
+    }
 
     out = malloc(outsize);
-    out[0] = '\0';
-    
-    while (fgets(buf, sizeof(buf), f)) {
-        buflen = strlen(buf);
-        if (outsize  < outlen + buflen + 1) {
-            outsize *= 2;
+    while (ReadFile(rd, buf, sizeof(buf), &readlen, NULL) && readlen > 0) {
+        // always keep some room for the exit code (32 chars)
+        if (outsize < outlen + readlen + 32) {
+            while (outsize < outlen + readlen + 32) outsize *= 2;
             out = realloc(out, outsize);
-         }
-         memcpy(out + outlen, buf, buflen + 1);
-         outlen += buflen;
+        }
+        memcpy(out + outlen, buf, readlen);
+        outlen += readlen;
     }
-    
-    _pclose(f);
-    
+    CloseHandle(rd);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &exitcode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    sprintf(out + outlen, "\n[exit %lu]\n", exitcode);
+
     return out;
 }
 
-char *tool_dispatch(const char *name, const char *args_json) {
+char *tool_dispatch(struct config_t *config, const char *name, const char *args_json) {
     const char *cmd;
     char *out;
     cJSON *args = cJSON_Parse(args_json);
 
-    term_color(C_DARK_GRAY);
+    term_color(C_FG_DARK_GRAY);
     printf("  $ %s (", name);
 
     if (!strcmp(name, "cmd")) {
         cmd = cJSON_GetObjectItemCaseSensitive(args, "command")->valuestring;
 
-        dbg("Tool call (%s): %s\n", name, cmd);
+#ifdef DEBUG_TOOLS
+        DBG_TOOL("Tool call (%s): %s\n", name, cmd);
+#endif
 
         if (strlen(cmd) > 62) printf("%.62s...", cmd);
         else fputs(cmd, stdout);
-        out = tool_handle_run_cmd(cmd);
+        out = tool_handle_run_cmd(config->cwd, cmd);
     }
 
     printf(")\n");
@@ -284,10 +314,10 @@ struct conversation_t {
     cJSON *pending_tool_msg; // message with pending tool calls
 };
 
-void convo_init(struct conversation_t *convo, const char *model, const struct tool_t *tooldefs) {
+void convo_init(struct conversation_t *convo, struct config_t *config, const struct tool_t *tooldefs) {
     const struct tool_t *tooldef;
     const struct tool_params_t *paramdef;
-    cJSON *messages;
+    cJSON *messages, *provider, *reasoning;
     cJSON *tools, *tool, *func, *params, *props, *prop, *reqs;
     cJSON *root = cJSON_CreateObject();
     int i, j;
@@ -331,11 +361,26 @@ void convo_init(struct conversation_t *convo, const char *model, const struct to
     }
     printf("\n\n");
 
-    cJSON_AddStringToObject(root, "model", model);
+    cJSON_AddStringToObject(root, "model", config->model);
     cJSON_AddItemToObject(root, "tools", tools);
 
     messages = cJSON_CreateArray();
     cJSON_AddItemToObject(root, "messages", messages);
+
+    // add section for zero data retention when enabled
+    if (config->zdr) {
+        provider = cJSON_CreateObject();
+        cJSON_AddBoolToObject(provider, "zdr", cJSON_True);
+        cJSON_AddItemToObject(root, "provider", provider);
+    }
+
+    // enable reasoning
+    if (strncmp(config->effort, "none", 4)) {
+        reasoning = cJSON_CreateObject();
+        cJSON_AddStringToObject(reasoning, "effort", config->effort);
+        cJSON_AddBoolToObject(reasoning, "exclude", cJSON_False); // keep traces for tool call continuity
+        cJSON_AddItemToObject(root, "reasoning", reasoning);
+    }
 
     convo->root = root;
     convo->messages = messages;
@@ -395,7 +440,13 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     
     res = cJSON_Parse(json);
 
-    dbg("Response: %s\n", cJSON_Print(res));
+#ifdef DEBUG_REQUESTS
+    {
+        char *json = cJSON_Print(res);
+        DBG_REQ("Response: %s\n", json);
+        free(json);
+    }
+#endif
 
     choice = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(res, "choices"), 0);
     finish_reason = cJSON_GetObjectItemCaseSensitive(choice, "finish_reason")->valuestring;
@@ -405,10 +456,10 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     if (!strcmp(finish_reason, "tool_calls")) {
         msg = cJSON_Duplicate(msg, cJSON_True);
 
-        // strip reasoning traces and refusals -> keep requests smaller
-        cJSON_DeleteItemFromObject(msg, "reasoning");
-        cJSON_DeleteItemFromObject(msg, "reasoning_details");
-        cJSON_DeleteItemFromObject(msg, "refusal");
+        // preserve reasoning traces to improve tool call continuity
+        //cJSON_DeleteItemFromObject(msg, "reasoning");
+        //cJSON_DeleteItemFromObject(msg, "reasoning_details");
+        //cJSON_DeleteItemFromObject(msg, "refusal");
 
         cJSON_AddItemToArray(convo->messages, msg);
 
@@ -425,7 +476,7 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     return has_tools;
 }
 
-void convo_handle_tool_calls(struct conversation_t *convo) {
+void convo_handle_tool_calls(struct conversation_t *convo, struct config_t *config) {
     cJSON *tcs, *tc, *func;
     const char *id, *name, *args_json;
     char *content;
@@ -440,7 +491,7 @@ void convo_handle_tool_calls(struct conversation_t *convo) {
         name = cJSON_GetObjectItemCaseSensitive(func, "name")->valuestring;
         args_json = cJSON_GetObjectItemCaseSensitive(func, "arguments")->valuestring;
  
-        content = tool_dispatch(name, args_json);
+        content = tool_dispatch(config, name, args_json);
         convo_add_tool_message(convo, id, content);
         free(content);
     }
@@ -466,7 +517,9 @@ void openrouter_init(struct http_context_t *ctx, const char *api_key) {
     _snprintf(buf, sizeof(buf), "Authorization: Bearer %s", api_key);
     ctx->headers = curl_slist_append(ctx->headers, buf);
     ctx->headers = curl_slist_append(ctx->headers, "Content-Type: application/json");
-    
+    ctx->headers = curl_slist_append(ctx->headers, "HTTP-Referer: https://csxn.gr");
+    ctx->headers = curl_slist_append(ctx->headers, "X-Title: VC6ai");
+
     curl_easy_setopt(ctx->curl, CURLOPT_URL, "https://openrouter.ai/api/v1/chat/completions");
     curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers);
 }
@@ -475,7 +528,13 @@ void openrouter_request(struct http_context_t *ctx, struct conversation_t *convo
     CURLcode res;
     char *payload = cJSON_PrintUnformatted(convo->root);
 
-    dbg("Request: %s\n", cJSON_Print(convo->root));
+#ifdef DEBUG_REQUESTS
+    {
+        char *json = cJSON_Print(convo->root);
+        DBG_REQ("Request: %s\n", json);
+        free(json);
+    }
+#endif
 
     ctx->reslen = 0;
     if (ctx->res) ctx->res[0] = '\0';
@@ -509,50 +568,62 @@ char *trim(char *str) {
     return ltrim(rtrim(str));
 }
 
-/* training:
-
-write me C89 code that prints a xmas tree, compile it with cl and run it. save it to tree.c
-*/
-
 //////////////////////////////////////////////////////////////////////////
 //
 // MAIN AGENT LOOP
 
-const char *system_prompt =
-    "You are a helpful AI agent running inside Windows XP cmd.exe. "
-    "Use British English and plain ASCII only: no Unicode, smart quotes, emojis, or Markdown. "
-    "Use normal sentence capitalisation; use uppercase only for headings. "
-    "Format lists with hyphens and tables with ASCII characters only: +, -, and |. "
+const char *sysprompt =
+    "You are VC6ai, a helpful AI agent running inside Windows XP cmd.exe. "
+    "Use British English spelling. "
+
+    "Plain ASCII text only. No Unicode. No Markdown. "
+    "Never ever use backtick (`), triple backtick (```), star for bold (**), "
+    "heading (#, ##, ###), link, smart quote, emdash, endash, or degree symbol. "
+    "Use '-' for dashe, UPPERCASE for heading. "
+
+    "Do not wrap command output in fences or quotes. "
+    "When explaining code, mention names plainly, without backticks or decoration. "
+    "Use short plain paragraphs. Use hyphen lists only when necessary. "
+
     "Recommend only commands and approaches that work in this Windows XP cmd.exe environment. "
     "Be brief, practical, and return only the direct answer.";
 
 int main(int argc, char **argv) {
-    char prompt_buf[2048], *prompt, *out;
-    struct config_t config;
-    struct http_context_t http;
-    struct conversation_t convo;
-
+    char buf[4096], *prompt, *out;
+    struct config_t config = {0};
+    struct http_context_t http = {0};
+    struct conversation_t convo = {0};
+    
     term_init();
     config_init(&config, ini_file);
 
-    printf("vc6ai\n\n");
+    // fancy title with background grad
+    printf("\n ");
+    term_color(C_FG_WHITE | C_BG_DARK_BLUE);   printf(" VC6");
+    term_color(C_FG_WHITE | C_BG_DARK_PURPLE); printf("ai");
+    term_color(C_FG_WHITE | C_BG_DARK_RED);    printf(" ");
+    term_reset();
+    printf("\n\n");
 
-    term_color(C_DARK_GRAY);
-    printf("  available commands: /new, /exit\n");
-
+    term_color(C_FG_DARK_GRAY);
+    printf("  available commands: /model, /new, /exit\n");
+    
     http_init(&http, 30L);
-    openrouter_init(&http, config.openrouter_api_key);
+    openrouter_init(&http, config.api_key);
+    
+    convo_init(&convo, &config, tools);
 
-    convo_init(&convo, config.openrouter_model, tools);
-    convo_add_text_message(&convo, "system", system_prompt);
+    // add env context to system prompt
+    _snprintf(buf, sizeof(buf), "%s\nCurrent directory: %s\n", sysprompt, config.cwd);
+    convo_add_text_message(&convo, "system", buf);
 
     term_reset();
 
     printf("> ");
 
-    term_color(C_TURQUOISE);
-    while (fgets(prompt_buf, sizeof(prompt_buf), stdin)) {
-        prompt = trim(prompt_buf);
+    term_color(C_FG_TURQUOISE);
+    while (fgets(buf, sizeof(buf), stdin)) {
+        prompt = trim(buf);
         if (strlen(prompt) == 0) goto prompt;
 
         putchar('\n');
@@ -563,17 +634,23 @@ int main(int argc, char **argv) {
                 goto cleanup;
             } else if (!strncmp(&prompt[1], "new", 3)) {
                 term_reset();
-                printf("  ! conversation cleared\n\n");
+                printf("  ¯ conversation cleared\n\n");
                 convo_clear(&convo);
+                goto prompt;
+            } else if (!strncmp(&prompt[1], "model", 5)) {
+                term_reset();
+                printf("  ¯ current model: %s\n", config.model);
+                printf("    reasoning: %s\n", config.effort);
+                printf("    zero data retention: %s\n\n", config.zdr ? "enabled" : "disabled");
                 goto prompt;
             }
 
-            term_color(C_RED);
-            fprintf(stderr, "unrecognised slash command: %s\n", prompt);
+            term_color(C_FG_RED);
+            fprintf(stderr, "  ¯ unrecognised slash command: %s\n\n", prompt);
             goto prompt;
         } else if (prompt[0] == '!') {
             // execute cmd directly
-            out = tool_handle_run_cmd(&prompt[1]);
+            out = tool_handle_run_cmd(config.cwd, &prompt[1]);
             if (strlen(out)) {
                 term_reset();
                 printf("%s\n\n", out);
@@ -595,19 +672,19 @@ request:
         // parse LLM (assistant) response, check if needs tools
         // TODO: handle if http.res is error
         if (convo_add_response(&convo, http.res)) {
-            convo_handle_tool_calls(&convo);
+            convo_handle_tool_calls(&convo, &config);
             // send tool call result to LLM
             goto request;
         }
 
         // print LLM response
-        term_color(C_WHITE);
+        term_color(C_FG_WHITE);
         printf("\n%s\n\n", convo.content);
 
 prompt:
         term_reset();
         printf("> ");
-        term_color(C_TURQUOISE);
+        term_color(C_FG_TURQUOISE);
     }
 
 cleanup:

@@ -1,0 +1,12 @@
+# Build outputs
+Debug/
+Release/
+
+# Visual Studio 6 IDE cache & user files
+*.ncb
+*.opt
+*.plg
+*.wwdb
+
+# Config
+vc6ai.ini

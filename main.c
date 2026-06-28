@@ -52,6 +52,7 @@ struct config_t {
     // OpenRouter config
     char api_key[255];
     char model[255];
+    char provider[255];
     char effort[12]; // max, xhigh, high, medium, low, minimial, none
     int zdr;
 };
@@ -66,6 +67,7 @@ void config_init(struct config_t *config, const char *ini_file) {
 
     GetPrivateProfileStringA("OpenRouter", "ApiKey", "", config->api_key, sizeof(config->api_key), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, sizeof(config->model), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "Provider", NULL, config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 1, ini_path);
 }
@@ -317,7 +319,7 @@ struct conversation_t {
 void convo_init(struct conversation_t *convo, struct config_t *config, const struct tool_t *tooldefs) {
     const struct tool_t *tooldef;
     const struct tool_params_t *paramdef;
-    cJSON *messages, *provider, *reasoning;
+    cJSON *messages, *provider;
     cJSON *tools, *tool, *func, *params, *props, *prop, *reqs;
     cJSON *root = cJSON_CreateObject();
     int i, j;
@@ -367,16 +369,20 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     messages = cJSON_CreateArray();
     cJSON_AddItemToObject(root, "messages", messages);
 
-    // add section for zero data retention when enabled
-    if (config->zdr) {
-        provider = cJSON_CreateObject();
-        cJSON_AddBoolToObject(provider, "zdr", cJSON_True);
-        cJSON_AddItemToObject(root, "provider", provider);
+    // add provider section
+    provider = cJSON_CreateObject();
+    cJSON_AddBoolToObject(provider, "zdr", config->zdr ? cJSON_True : cJSON_False); // zero data retention
+    if (config->provider) {
+        cJSON *order = cJSON_CreateArray();
+        cJSON_AddItemToArray(order, cJSON_CreateString(config->provider));
+        cJSON_AddItemToObject(provider, "order", order);
+        cJSON_AddBoolToObject(provider, "allow_fallbacks", cJSON_False);
     }
+    cJSON_AddItemToObject(root, "provider", provider);
 
     // enable reasoning
     if (strncmp(config->effort, "none", 4)) {
-        reasoning = cJSON_CreateObject();
+        cJSON *reasoning = cJSON_CreateObject();
         cJSON_AddStringToObject(reasoning, "effort", config->effort);
         cJSON_AddBoolToObject(reasoning, "exclude", cJSON_False); // keep traces for tool call continuity
         cJSON_AddItemToObject(root, "reasoning", reasoning);
@@ -577,9 +583,9 @@ const char *sysprompt =
     "Use British English spelling. "
 
     "Plain ASCII text only. No Unicode. No Markdown. "
-    "Never ever use backtick (`), triple backtick (```), star for bold (**), "
-    "heading (#, ##, ###), link, smart quote, emdash, endash, or degree symbol. "
-    "Use '-' for dashe, UPPERCASE for heading. "
+    "Never ever output backticks (`), triple backticks (```), stars for bold (**), "
+    "headings (#, ##, ###), links, smart quotes, emdashes, endashes, and degree symbols. "
+    "Use '-' for all types of dashes. "
 
     "Do not wrap command output in fences or quotes. "
     "When explaining code, mention names plainly, without backticks or decoration. "

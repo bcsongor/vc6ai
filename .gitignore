@@ -12,5 +12,6 @@ Release/
 # Config
 vc6ai.ini
 
-# Logs
+# Logs and stuff
 *.log
+stuff/

@@ -78,15 +78,33 @@ void config_init(struct config_t *config, const char *ini_file) {
 
 enum term_color {
     // foreground
-    C_FG_DARK_GRAY = FOREGROUND_INTENSITY,
-    C_FG_TURQUOISE = FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
-    C_FG_RED       = FOREGROUND_RED | FOREGROUND_INTENSITY,
-    C_FG_PURPLE    = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
-    C_FG_WHITE     = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    C_FG_DARK_CYAN   = FOREGROUND_BLUE | FOREGROUND_GREEN,
+    C_FG_DARK_YELLOW = FOREGROUND_RED | FOREGROUND_GREEN,
+    C_FG_DARK_GRAY   = FOREGROUND_INTENSITY,
+
+    C_FG_GRAY        = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_GREEN,
+    C_FG_BLUE        = FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    C_FG_TURQUOISE   = FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+    C_FG_RED         = FOREGROUND_RED | FOREGROUND_INTENSITY,
+    C_FG_PURPLE      = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    C_FG_YELLOW      = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+    C_FG_WHITE       = FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+
     // background
     C_BG_DARK_BLUE   = BACKGROUND_BLUE,
-    C_BG_DARK_PURPLE = BACKGROUND_RED | BACKGROUND_BLUE,
-    C_BG_DARK_RED    = BACKGROUND_RED
+    C_BG_DARK_RED    = BACKGROUND_RED,
+    C_BG_DARK_PURPLE = BACKGROUND_RED | BACKGROUND_BLUE
+};
+
+enum term_md_state {
+    MD_NORMAL,
+    MD_BOLD,
+    MD_ITALIC,
+    MD_CODE_SPAN,
+    MD_LINK_TEXT,
+    MD_LINK_URL,
+    MD_BLOCKQUOTE,
+    MD_CODE_BLOCK
 };
 
 static HANDLE term_handle;
@@ -105,6 +123,86 @@ void term_color(enum term_color color) {
 
 void term_reset(void) {
     SetConsoleTextAttribute(term_handle, term_orig_attrs);
+}
+
+void term_render_markdown(const char *str) {
+    size_t i, len = strlen(str);
+    enum term_md_state state = MD_NORMAL;
+    char c;
+#define BOL (i == 0 || str[i-1] == '\n')
+#define TBK (i + 2 < len && str[i+1] == '`' && str[i+2] == '`')
+
+    term_reset();
+    for (i = 0; i < len; ++i) {
+        c = str[i];
+
+        // passthrough states
+        if (state == MD_CODE_BLOCK) {
+            if (c == '`' && BOL && TBK) { state = MD_NORMAL; term_reset(); i += 2; continue; }
+            putchar(c); continue;
+        }
+        if (state == MD_CODE_SPAN) { if (c == '`') { state = MD_NORMAL; term_reset(); } else putchar(c); continue; }
+        if (state == MD_LINK_URL) { putchar(c); if (c == ')') { state = MD_NORMAL; term_reset(); } continue; }
+        if (state == MD_BLOCKQUOTE) { if (c == '\n') { state = MD_NORMAL; term_reset(); } putchar(c); continue; }
+        if (state == MD_LINK_TEXT) {
+            if (c == ']' && i + 1 < len && str[i+1] == '(') {
+                putchar(c); state = MD_LINK_URL; i++; term_color(C_FG_DARK_GRAY); putchar('(');
+            } else putchar(c);
+            continue;
+        }
+
+        // heading
+        if (c == '#' && BOL) {
+            int level = 1;
+            while (i + 1 < len && str[i+1] == '#') { level++; i++; }
+            while (i + 1 < len && str[i+1] == ' ') i++;
+            term_color(C_FG_WHITE | (level == 1 ? C_BG_DARK_RED : level == 2 ? C_BG_DARK_PURPLE : C_BG_DARK_BLUE));
+            putchar(' ');
+            continue;
+
+        }
+
+        // code block / span
+        if (c == '`' && BOL && TBK) { state = MD_CODE_BLOCK; term_color(C_FG_YELLOW); i += 2; while (i + 1 < len && str[i+1] != '\n') i++; continue; }
+        if (c == '`') { state = MD_CODE_SPAN; term_color(C_FG_YELLOW); continue; }
+        
+        // bold or italic, * or _, doubled or tripled for bold
+        if (c == '*' || c == '_') {
+            int n = 1;
+            while (i + n < len && str[i+n] == c && n < 3) n++;
+            if (c == '_' && i > 0 && isalnum(str[i-1]) && i + n < len && isalnum(str[i+n])) { putchar(c); continue; } // skip if snake_case_name
+            if (n >= 2) {
+                if (state == MD_BOLD) { state = MD_NORMAL; term_reset(); } else { state = MD_BOLD; term_color(C_FG_WHITE); }
+            } else {
+                if (state == MD_ITALIC) { state = MD_NORMAL; term_reset(); } else { state = MD_ITALIC; term_color(C_FG_DARK_YELLOW); }
+            }
+            i += n - 1; continue;
+        }
+
+        // list: - at line start
+        if (c == '-' && i + 1 < len && str[i+1] == ' ' && BOL) { putchar(249); putchar(' '); i++; continue; } // replace - with bullet
+
+        // blockquote: > at line start, followed by space or end of line. grey until newline resets
+        if (c == '>' && BOL && (i + 1 >= len || str[i+1] == ' ' || str[i+1] == '\n')) {
+            state = MD_BLOCKQUOTE; term_color(C_FG_DARK_GRAY); putchar('>');
+            continue;
+        }
+
+        // link: only treat [ as a link when ]( follows on the same line
+        if (c == '[') {
+            size_t j = i + 1;
+            while (j < len && str[j] != '\n' && str[j] != ']') j++;
+            if (j + 1 < len && str[j] == ']' && str[j+1] == '(') {
+                state = MD_LINK_TEXT; term_color(C_FG_BLUE); putchar(c); continue;
+            }
+        }
+
+        if (c == '\n') term_reset();
+        putchar(c);
+    }
+#undef BOL
+#undef TBK
+    term_reset();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -282,7 +380,7 @@ char *tool_dispatch(struct config_t *config, const char *name, const char *args_
     char *out;
     cJSON *args = cJSON_Parse(args_json);
 
-    term_color(C_FG_DARK_GRAY);
+    term_color(C_FG_DARK_CYAN);
     printf("  $ %s (", name);
 
     if (!strcmp(name, "cmd")) {
@@ -371,7 +469,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
 
     // add provider section
     provider = cJSON_CreateObject();
-    cJSON_AddBoolToObject(provider, "zdr", config->zdr ? cJSON_True : cJSON_False); // zero data retention
+    if (config->zdr) cJSON_AddBoolToObject(provider, "zdr", cJSON_True); // zero data retention
     if (strlen(config->provider)) {
         cJSON *order = cJSON_CreateArray();
         cJSON_AddItemToArray(order, cJSON_CreateString(config->provider));
@@ -581,16 +679,9 @@ char *trim(char *str) {
 const char *sysprompt =
     "You are VC6ai, a helpful AI agent running inside Windows XP cmd.exe. "
     "Use British English spelling. "
-
-    "Plain ASCII text only. No Unicode. No Markdown. "
-    "Never ever output backticks (`), triple backticks (```), stars for bold (**), "
-    "headings (#, ##, ###), links, smart quotes, emdashes, endashes, and degree symbols. "
-    "Use '-' for all types of dashes. "
-
-    "Do not wrap command output in fences or quotes. "
-    "When explaining code, mention names plainly, without backticks or decoration. "
+    "Plain ASCII text only. No Unicode. No smart quotes, emdashes, endashes, and degree symbols. "
+    "Use standard whitespaces. "
     "Use short plain paragraphs. Use hyphen lists only when necessary. "
-
     "Recommend only commands and approaches that work in this Windows XP cmd.exe environment. "
     "Be brief, practical, and return only the direct answer.";
 
@@ -668,8 +759,9 @@ int main(int argc, char **argv) {
         // store user message
         convo_add_text_message(&convo, "user", prompt);
 
-        term_reset();
+        term_color(C_FG_DARK_CYAN);
         printf("  ~ thinking ...\n");
+        term_reset();
 
 request:
         // send user message to LLM
@@ -684,8 +776,9 @@ request:
         }
 
         // print LLM response
-        term_color(C_FG_WHITE);
-        printf("\n%s\n\n", convo.content);
+        putchar('\n');
+        term_render_markdown(convo.content);
+        printf("\n\n");
 
 prompt:
         term_reset();

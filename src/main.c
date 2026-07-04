@@ -13,7 +13,6 @@
 #define DEBUG_REQUESTS
 #define DEBUG_TOOLS
 
-
 //////////////////////////////////////////////////////////////////////////
 //
 // DEBUGGING
@@ -110,11 +109,31 @@ enum term_md_state {
 static HANDLE term_handle;
 static WORD term_orig_attrs;
 
+static volatile LONG term_interrupted_flag = 0;
+
+static BOOL WINAPI term_ctrl_handler(DWORD type) {
+    if (type == CTRL_C_EVENT) {
+        term_interrupted_flag = 1;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 void term_init(void) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     term_handle = GetStdHandle(STD_OUTPUT_HANDLE);
     GetConsoleScreenBufferInfo(term_handle, &csbi);
     term_orig_attrs = csbi.wAttributes;
+
+    SetConsoleCtrlHandler(term_ctrl_handler, TRUE);
+}
+
+int term_interrupted(void) {
+    return term_interrupted_flag != 0;
+}
+
+void term_interrupt_reset(void) {
+    term_interrupted_flag = 0;
 }
 
 void term_color(enum term_color color) {
@@ -231,6 +250,10 @@ static size_t http_write_callback(char *data, size_t size, size_t nmemb, void *u
     return realsize;
 }
 
+static int http_progress_callback(void *clientp, double dltotal, double dlnow, double ultotal, double ulnow) {
+    return term_interrupted();
+}
+
 int http_init(struct http_context_t *ctx, long timeout) {
     CURLcode res;
 
@@ -255,6 +278,8 @@ int http_init(struct http_context_t *ctx, long timeout) {
     curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(ctx->curl, CURLOPT_WRITEFUNCTION, http_write_callback);
     curl_easy_setopt(ctx->curl, CURLOPT_WRITEDATA, ctx);
+    curl_easy_setopt(ctx->curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(ctx->curl, CURLOPT_PROGRESSFUNCTION, http_progress_callback);
 
     return 0;
 }
@@ -647,7 +672,7 @@ void openrouter_request(struct http_context_t *ctx, struct conversation_t *convo
     res = curl_easy_perform(ctx->curl);
     free(payload);
 
-    if (res != CURLE_OK) {
+    if (res != CURLE_OK && res != CURLE_ABORTED_BY_CALLBACK) {
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
     }
 }
@@ -714,12 +739,21 @@ int main(int argc, char **argv) {
     _snprintf(buf, sizeof(buf), "%s\nCurrent directory: %s\n", sysprompt, config.cwd);
     convo_add_text_message(&convo, "system", buf);
 
-    term_reset();
-
-    printf("> ");
-
-    term_color(C_FG_TURQUOISE);
-    while (fgets(buf, sizeof(buf), stdin)) {
+    for (;;) {
+prompt:
+        term_reset();
+        printf("> ");
+        term_color(C_FG_TURQUOISE);
+        if (!fgets(buf, sizeof(buf), stdin)) {
+            // handle Ctrl-C abort
+            if (term_interrupted()) {
+                term_interrupt_reset();
+                clearerr(stdin);
+                putchar('\n');
+                goto prompt;
+            }
+            break;
+        }
         prompt = trim(buf);
         if (strlen(prompt) == 0) goto prompt;
 
@@ -767,6 +801,12 @@ request:
         // send user message to LLM
         openrouter_request(&http, &convo);
 
+        if (term_interrupted()) {
+            term_interrupt_reset();
+            printf("  ~ interrupted\n\n");
+            goto prompt;
+        }
+
         // parse LLM (assistant) response, check if needs tools
         // TODO: handle if http.res is error
         if (convo_add_response(&convo, http.res)) {
@@ -779,11 +819,6 @@ request:
         putchar('\n');
         term_render_markdown(convo.content);
         printf("\n\n");
-
-prompt:
-        term_reset();
-        printf("> ");
-        term_color(C_FG_TURQUOISE);
     }
 
 cleanup:

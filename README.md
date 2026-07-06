@@ -4,7 +4,7 @@ An AI agent that runs on Windows XP et al.
 
 <img width="797" height="600" alt="image" src="https://github.com/user-attachments/assets/cd0d9eb3-d3fe-4c6a-83e5-b091bfd4597d" />
 
-I built this over a weekend. It's about 700 lines of C, it compiles with Visual C++ 6 and it runs happily on a Windows Server 2003 box that has no business running anything from this decade. It talks to an LLM and it has exactly one tool.
+I built this over a weekend. It's about 900 lines of C, it compiles with Visual C++ 6 and it runs happily on a Windows Server 2003 box that has no business running anything from this decade. It talks to an LLM and it has exactly one tool.
 
 ## Why
 
@@ -37,13 +37,17 @@ Copy `vc6ai.sample.ini` to `vc6ai.ini` and set the OpenRouter API key.
 ```ini
 [OpenRouter]
 ApiKey=sk-or-v1-...
-Model=deepseek/deepseek-v4-flash:nitro
+Model=deepseek/deepseek-v4-flash
+Provider=Fireworks
 Effort=xhigh
 ZeroDataRetention=1
 ```
 
 Any cheap current-gen model does the job (works extremely well with GLM-5.2!).
+`Provider` is optional and pins a single provider on OpenRouter (fallbacks get disabled). `Effort` sets the reasoning effort.
 
 Build it in VC6, run the exe and it'll ask you for a prompt. Sometimes it wanders off, but it gets there often enough to be genuinely useful, which surprised me for something this small.
+
+There are three slash commands: `/model`, `/new` and `/exit`. Prefix a line with `!` to run a command via cmd.exe. Ctrl-C aborts a request that's taking too long.
 
 *Enjoy!*

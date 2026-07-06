@@ -395,6 +395,33 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
+    // cap huge output: keep head + tail, save the full output to a file
+#define CAP_HEAD 8192
+#define CAP_TAIL 24576
+#define CAP_LIMIT (CAP_HEAD + CAP_TAIL + 512)
+    
+    if (outlen > CAP_LIMIT) {
+        static int seq = 0;
+        char path[MAX_PATH], mark[MAX_PATH + 80];
+        FILE *f;
+        size_t mlen;
+
+        CreateDirectoryA("C:\\Temp", NULL);
+        CreateDirectoryA("C:\\Temp\\vc6ai", NULL);
+        sprintf(path, "C:\\Temp\\vc6ai\\call_%u_%d.txt", GetCurrentProcessId(), ++seq);
+
+        f = fopen(path, "wb");
+        if (f) { fwrite(out, 1, outlen, f); fclose(f); }
+
+        sprintf(mark, "\n[... %u of %u bytes omitted, full output: %s ...]\n", outlen - CAP_HEAD - CAP_TAIL, outlen, path);
+        mlen = strlen(mark);
+        
+        memmove(out + CAP_HEAD + mlen, out + outlen - CAP_TAIL, CAP_TAIL);
+        memcpy(out + CAP_HEAD, mark, mlen);
+        
+        outlen = CAP_HEAD + mlen + CAP_TAIL;
+    }
+
     sprintf(out + outlen, "\n[exit %lu]", exitcode);
 
     return out;

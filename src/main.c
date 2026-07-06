@@ -517,7 +517,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     convo->pending_tool_msg = NULL;
 }
 
-void convo_clear(struct conversation_t *convo) {
+void convo_clear(struct conversation_t *convo) { 
     cJSON *messages, *system;
 
     system = cJSON_DetachItemFromArray(convo->messages, 0);
@@ -562,7 +562,7 @@ void convo_add_tool_message(struct conversation_t *convo, const char *id, const 
 }
 
 int convo_add_response(struct conversation_t *convo, const char *json) {
-    cJSON *res, *choice, *msg;
+    cJSON *res, *choice, *msg, *err;
     cJSON *role, *content;
     const char *finish_reason;
     int has_tools = 0;
@@ -577,7 +577,18 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     }
 #endif
 
-    choice = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(res, "choices"), 0);
+    err = res ? cJSON_GetObjectItemCaseSensitive(res, "error") : NULL;
+    choice = res ? cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(res, "choices"), 0) : NULL;
+
+    if (err || !choice) {
+        msg = cJSON_GetObjectItemCaseSensitive(err, "message");
+        term_color(C_FG_RED);
+        fprintf(stderr, "  ! api: %s\n\n", msg ? msg->valuestring : "bad response");
+        term_reset();
+        cJSON_Delete(res);
+        return -1;
+    }
+
     finish_reason = cJSON_GetObjectItemCaseSensitive(choice, "finish_reason")->valuestring;
     msg = cJSON_GetObjectItemCaseSensitive(choice, "message");
     role = cJSON_GetObjectItemCaseSensitive(msg, "role");
@@ -653,7 +664,7 @@ void openrouter_init(struct http_context_t *ctx, const char *api_key) {
     curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers);
 }
 
-void openrouter_request(struct http_context_t *ctx, struct conversation_t *convo) {
+CURLcode openrouter_request(struct http_context_t *ctx, struct conversation_t *convo) {
     CURLcode res;
     char *payload = cJSON_PrintUnformatted(convo->root);
 
@@ -675,6 +686,8 @@ void openrouter_request(struct http_context_t *ctx, struct conversation_t *convo
     if (res != CURLE_OK && res != CURLE_ABORTED_BY_CALLBACK) {
         fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
     }
+
+    return res;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -732,7 +745,7 @@ int main(int argc, char **argv) {
     
     http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);
-    
+
     convo_init(&convo, &config, tools);
 
     // add env context to system prompt
@@ -799,20 +812,24 @@ prompt:
 
 request:
         // send user message to LLM
-        openrouter_request(&http, &convo);
-
-        if (term_interrupted()) {
-            term_interrupt_reset();
-            printf("  ~ interrupted\n\n");
+        if (openrouter_request(&http, &convo)) {
+            if (term_interrupted()) {
+                term_interrupt_reset();
+                printf("  ~ interrupted\n\n");
+            }
             goto prompt;
         }
 
-        // parse LLM (assistant) response, check if needs tools
-        // TODO: handle if http.res is error
-        if (convo_add_response(&convo, http.res)) {
-            convo_handle_tool_calls(&convo, &config);
-            // send tool call result to LLM
-            goto request;
+        // parse LLM (assistant) response
+        //   -1: some API error
+        //    0: ok
+        //    1: ok + has tool calls 
+        switch (convo_add_response(&convo, http.res)) {
+            case -1: goto prompt;
+            case 1:
+                convo_handle_tool_calls(&convo, &config);
+                // send tool call result to LLM
+                goto request;
         }
 
         // print LLM response

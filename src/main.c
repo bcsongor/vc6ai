@@ -68,7 +68,7 @@ void config_init(struct config_t *config, const char *ini_file) {
     GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, sizeof(config->model), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Provider", "", config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
-    config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 1, ini_path);
+    config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 0, ini_path);
 }
 
 //////////////////////////////////////////////////////////////////////////

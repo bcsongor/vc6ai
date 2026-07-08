@@ -48,6 +48,6 @@ Any cheap current-gen model does the job (works extremely well with GLM-5.2!).
 
 Build it in VC6, run the exe and it'll ask you for a prompt. Sometimes it wanders off, but it gets there often enough to be genuinely useful, which surprised me for something this small.
 
-There are three slash commands: `/model`, `/new` and `/exit`. Prefix a line with `!` to run a command via cmd.exe. Ctrl-C aborts a request that's taking too long.
+There are four slash commands: `/model`, `/stats`, `/new` and `/exit`. Prefix a line with `!` to run a command via cmd.exe. Ctrl-C aborts a request that's taking too long.
 
 *Enjoy!*

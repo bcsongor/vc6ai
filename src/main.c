@@ -464,6 +464,12 @@ struct conversation_t {
 
     const char *content; // last content
     cJSON *pending_tool_msg; // message with pending tool calls
+
+    // session usage stats
+    int tokens_in;
+    int tokens_out;
+    int requests;
+    double cost;
 };
 
 void convo_init(struct conversation_t *convo, struct config_t *config, const struct tool_t *tooldefs) {
@@ -542,6 +548,11 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     convo->messages = messages;
     convo->content = NULL;
     convo->pending_tool_msg = NULL;
+
+    convo->tokens_in = 0;
+    convo->tokens_out = 0;
+    convo->requests = 0;
+    convo->cost = 0.0;
 }
 
 void convo_clear(struct conversation_t *convo) { 
@@ -589,7 +600,7 @@ void convo_add_tool_message(struct conversation_t *convo, const char *id, const 
 }
 
 int convo_add_response(struct conversation_t *convo, const char *json) {
-    cJSON *res, *choice, *msg, *err;
+    cJSON *res, *choice, *msg, *err, *usage;
     cJSON *role, *content;
     const char *finish_reason;
     int has_tools = 0;
@@ -614,6 +625,15 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
         term_reset();
         cJSON_Delete(res);
         return -1;
+    }
+
+    // accumulate session usage stats
+    usage = cJSON_GetObjectItemCaseSensitive(res, "usage");
+    if (usage) {
+        convo->tokens_in  += cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens")->valueint;
+        convo->tokens_out += cJSON_GetObjectItemCaseSensitive(usage, "completion_tokens")->valueint;
+        convo->cost += cJSON_GetObjectItemCaseSensitive(usage, "cost")->valuedouble;
+        convo->requests++;
     }
 
     finish_reason = cJSON_GetObjectItemCaseSensitive(choice, "finish_reason")->valuestring;
@@ -768,7 +788,7 @@ int main(int argc, char **argv) {
     printf("\n\n");
 
     term_color(C_FG_DARK_GRAY);
-    printf("  available commands: /model, /new, /exit\n");
+    printf("  available commands: /model, /stats, /new, /exit\n");
     
     http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);
@@ -813,6 +833,13 @@ prompt:
                 printf("  ¯ current model: %s\n", config.model);
                 printf("    reasoning: %s\n", config.effort);
                 printf("    zero data retention: %s\n\n", config.zdr ? "enabled" : "disabled");
+                goto prompt;
+            } else if (!strncmp(&prompt[1], "stats", 5)) {
+                term_reset();
+                printf("  ¯ session stats (%d requests)\n", convo.requests);
+                printf("    tokens in:  %d\n", convo.tokens_in);
+                printf("    tokens out: %d\n", convo.tokens_out);
+                printf("    cost:       $%.4f\n\n", convo.cost);
                 goto prompt;
             }
 

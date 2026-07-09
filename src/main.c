@@ -599,6 +599,18 @@ void convo_add_tool_message(struct conversation_t *convo, const char *id, const 
     convo->content = content->valuestring;
 }
 
+void convo_strip_reasoning(struct conversation_t *convo) {
+    cJSON *msg, *role;
+
+    cJSON_ArrayForEach(msg, convo->messages) {
+        role = cJSON_GetObjectItemCaseSensitive(msg, "role");
+        if (!cJSON_IsString(role) || strcmp(role->valuestring, "assistant")) continue;
+        cJSON_DeleteItemFromObject(msg, "reasoning");
+        cJSON_DeleteItemFromObject(msg, "reasoning_details");
+        cJSON_DeleteItemFromObject(msg, "refusal");
+    }
+}
+
 int convo_add_response(struct conversation_t *convo, const char *json) {
     cJSON *res, *choice, *msg, *err, *usage;
     cJSON *role, *content;
@@ -856,6 +868,9 @@ prompt:
             free(out);
             goto prompt;
         }
+
+        // drop reasoning traces from earlier turns to shrink the payload
+        convo_strip_reasoning(&convo);
 
         // store user message
         convo_add_text_message(&convo, "user", prompt);

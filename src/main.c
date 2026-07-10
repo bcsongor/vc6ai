@@ -619,6 +619,11 @@ void convo_clear(struct conversation_t *convo) {
     convo->messages = messages;
     convo->content = NULL;
     convo->pending_tool_msg = NULL;
+    convo->tokens_in = 0;
+    convo->tokens_out = 0;
+    convo->tokens_cached = 0;
+    convo->requests = 0;
+    convo->cost = 0.0;
 }
 
 void convo_add_text_message(struct conversation_t *convo, const char *role, const char *content_str) {

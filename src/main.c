@@ -318,19 +318,26 @@ const struct tool_params_t run_cmd_params[] = {
         "Exact command to pass to Windows XP cmd.exe /C. "
         "The tool captures stdout and stderr automatically. "
         "Use one complete command; combine related steps with && to avoid extra tool calls. "
-        "Do not use PowerShell, Python, package managers, or newer Windows-only utilities. "
+        "Do not use PowerShell, Python, Perl, package managers, or newer Windows-only utilities. "
         "Use call \"file.bat\" when running a batch file before another command. "
         "Keep commands under about 4000 characters. "
-        "For larger files, write them in several append blocks instead of one huge command."
-        // file manipluation via perl
-        "perl.exe is available and should always be used for creating, replacing, or editing text files. "
-        "For whole-file writes, use perl.exe with open/print/close. "
-        "For whole-file writes, prefer perl.exe print statements using chr(10) for newlines. "
-        "Do not use \\n inside single-quoted Perl strings; Perl will write it literally. "
-        "For edits, use perl.exe -0777 for whole-file search/replace, usually with -pi.bak. "
+        // file reads and manipulation via busybox 
+        "busybox.exe is available for sh, find, grep, sed, awk, cat, head, tail, diff, patch, and tee. "
+        "Use forward slashes in paths passed to BusyBox. "
+        "For edits, run busybox.exe patch -p1 and pass a standard unified diff in stdin. "
+        "Prefer CRLF line endings; patch and tee write LF, so run busybox.exe unix2dos FILE afterwards on text files. "
+        "For whole-file writes, run busybox.exe tee FILE and pass the file content in stdin. "
+        "For anything involving pipes, quoting, or regex patterns, run busybox.exe sh and pass the script via stdin instead of building cmd.exe pipelines. "
         // internet access via curl
         "curl.exe is available for internet access.",
         1
+    },
+    {
+        "stdin",
+        "string",
+        "Optional text to send verbatim to the command's standard input. "
+        "Use this for patches and whole-file writes instead of shell quoting.",
+        0
     },
     {NULL, NULL, NULL, 0}
 };
@@ -345,24 +352,35 @@ const struct tool_t tools[] = {
     {NULL, NULL, NULL}
 };
 
-char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
+char *tool_handle_run_cmd(const char *cwd, const char *cmd, const char *input) {
     SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-    HANDLE rd = NULL, wr = NULL;
+    HANDLE rd = NULL, wr = NULL, in_rd = NULL, in_wr = NULL;
     STARTUPINFO si = {0};
     PROCESS_INFORMATION pi = {0};
     char *cmdline, buf[1024], *out;
     size_t outsize = 4096, outlen = 0;
-    DWORD readlen, exitcode;
+    DWORD readlen, exitcode, written, in_len, in_pos;
     BOOL ok;
 
     ok = CreatePipe(&rd, &wr, &sa, 0);
-    if (!ok) return strdup("CreatePipe failed\n");
+    if (!ok) return strdup("CreatePipe stdout failed\n");
 
     SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
+    if (input) {
+        ok = CreatePipe(&in_rd, &in_wr, &sa, 0);
+        if (!ok) {
+            CloseHandle(rd);
+            CloseHandle(wr);
+            return strdup("CreatePipe stdin failed\n");
+        }
+        
+        SetHandleInformation(in_wr, HANDLE_FLAG_INHERIT, 0);
+    }
+
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdInput = input ? in_rd : GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = wr;
     si.hStdError = wr;
 
@@ -374,10 +392,26 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
     CloseHandle(wr);
     if (!ok) {
         sprintf(buf, "CreateProcessA failed: %d\n", GetLastError());
+        if (input) CloseHandle(in_wr);
         CloseHandle(rd);
         return strdup(buf);
     }
 
+    // send input
+    if (input) {
+        in_len = (DWORD)strlen(input);
+        in_pos = 0;
+
+        while (in_pos < in_len) {
+            ok = WriteFile(in_wr, input + in_pos, in_len - in_pos, &written, NULL);
+            if (!ok || !written) break;
+            in_pos += written;
+        }
+
+        CloseHandle(in_wr);
+    }
+
+    // read output
     out = malloc(outsize);
     while (ReadFile(rd, buf, sizeof(buf), &readlen, NULL) && readlen > 0) {
         // always keep some room for the exit code (32 chars)
@@ -428,9 +462,9 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd) {
 }
 
 char *tool_dispatch(struct config_t *config, const char *name, const char *args_json) {
-    const char *cmd;
+    const char *cmd, *input = NULL;
     char *out;
-    cJSON *args = cJSON_Parse(args_json);
+    cJSON *stdin_json, *args = cJSON_Parse(args_json);
 
     term_color(C_FG_DARK_CYAN);
     printf("  $ %s (", name);
@@ -438,13 +472,16 @@ char *tool_dispatch(struct config_t *config, const char *name, const char *args_
     if (!strcmp(name, "cmd")) {
         cmd = cJSON_GetObjectItemCaseSensitive(args, "command")->valuestring;
 
+        stdin_json = cJSON_GetObjectItemCaseSensitive(args, "stdin");
+        if (cJSON_IsString(stdin_json)) input = stdin_json->valuestring;
+
 #ifdef DEBUG_TOOLS
         DBG_TOOL("Tool call (%s): %s\n", name, cmd);
 #endif
 
         if (strlen(cmd) > 62) printf("%.62s...", cmd);
         else fputs(cmd, stdout);
-        out = tool_handle_run_cmd(config->cwd, cmd);
+        out = tool_handle_run_cmd(config->cwd, cmd, input);
     }
 
     printf(")\n");
@@ -878,7 +915,7 @@ prompt:
             goto prompt;
         } else if (prompt[0] == '!') {
             // execute cmd directly
-            out = tool_handle_run_cmd(config.cwd, &prompt[1]);
+            out = tool_handle_run_cmd(config.cwd, &prompt[1], NULL);
             if (strlen(out)) {
                 term_reset();
                 printf("%s\n\n", out);

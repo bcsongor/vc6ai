@@ -468,14 +468,21 @@ struct conversation_t {
     // session usage stats
     int tokens_in;
     int tokens_out;
+    int tokens_cached;
     int requests;
     double cost;
 };
 
+static const char *session_id(void) {
+    static char id[40];
+    if (!id[0]) _snprintf(id, sizeof(id), "vc6ai-%lu-%lu", GetCurrentProcessId(), GetTickCount());
+    return id;
+}
+
 void convo_init(struct conversation_t *convo, struct config_t *config, const struct tool_t *tooldefs) {
     const struct tool_t *tooldef;
     const struct tool_params_t *paramdef;
-    cJSON *messages, *provider;
+    cJSON *messages, *provider, *cache;
     cJSON *tools, *tool, *func, *params, *props, *prop, *reqs;
     cJSON *root = cJSON_CreateObject();
     int i, j;
@@ -520,6 +527,12 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     printf("\n\n");
 
     cJSON_AddStringToObject(root, "model", config->model);
+    cJSON_AddStringToObject(root, "session_id", session_id());
+
+    // enable prompt caching
+    cache = cJSON_CreateObject();
+    cJSON_AddStringToObject(cache, "type", "ephemeral");
+    cJSON_AddItemToObject(root, "cache_control", cache);
     cJSON_AddItemToObject(root, "tools", tools);
 
     messages = cJSON_CreateArray();
@@ -551,6 +564,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
 
     convo->tokens_in = 0;
     convo->tokens_out = 0;
+    convo->tokens_cached = 0;
     convo->requests = 0;
     convo->cost = 0.0;
 }
@@ -612,8 +626,8 @@ void convo_strip_reasoning(struct conversation_t *convo) {
 }
 
 int convo_add_response(struct conversation_t *convo, const char *json) {
-    cJSON *res, *choice, *msg, *err, *usage;
-    cJSON *role, *content;
+    cJSON *res, *choice, *msg, *err, *usage, *details;
+    cJSON *role, *content, *tc, *tcs;
     const char *finish_reason;
     int has_tools = 0;
     
@@ -645,6 +659,8 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
         convo->tokens_in  += cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens")->valueint;
         convo->tokens_out += cJSON_GetObjectItemCaseSensitive(usage, "completion_tokens")->valueint;
         convo->cost += cJSON_GetObjectItemCaseSensitive(usage, "cost")->valuedouble;
+        details = cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens_details");
+        if (details) convo->tokens_cached += cJSON_GetObjectItemCaseSensitive(details, "cached_tokens")->valueint;
         convo->requests++;
     }
 
@@ -655,10 +671,11 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     if (!strcmp(finish_reason, "tool_calls")) {
         msg = cJSON_Duplicate(msg, cJSON_True);
 
-        // preserve reasoning traces to improve tool call continuity
-        //cJSON_DeleteItemFromObject(msg, "reasoning");
-        //cJSON_DeleteItemFromObject(msg, "reasoning_details");
-        //cJSON_DeleteItemFromObject(msg, "refusal");
+        // strip response-only fields the API never wants back
+        cJSON_DeleteItemFromObject(msg, "refusal");
+        cJSON_DeleteItemFromObject(msg, "annotations");
+        tcs = cJSON_GetObjectItemCaseSensitive(msg, "tool_calls");
+        cJSON_ArrayForEach(tc, tcs) cJSON_DeleteItemFromObject(tc, "index");
 
         cJSON_AddItemToArray(convo->messages, msg);
 
@@ -851,6 +868,7 @@ prompt:
                 printf("  ¯ session stats (%d requests)\n", convo.requests);
                 printf("    tokens in:  %d\n", convo.tokens_in);
                 printf("    tokens out: %d\n", convo.tokens_out);
+                printf("    cached in:  %d\n", convo.tokens_cached);
                 printf("    cost:       $%.4f\n\n", convo.cost);
                 goto prompt;
             }

@@ -316,7 +316,9 @@ const struct tool_params_t run_cmd_params[] = {
         "string",
         // general
         "Exact command to pass to Windows XP cmd.exe /C. "
-        "The tool captures stdout and stderr automatically. "
+        "Stdout and stderr are captured and the exit code is appended as [exit N]. "
+        "Output beyond about 32 KB is trimmed to head and tail; the full output is saved to a file under C:\\Temp\\vc6ai. "
+        "There is no timeout, so never run commands that wait for input. "
         "Use one complete command; combine related steps with && to avoid extra tool calls. "
         "Do not use PowerShell, Python, Perl, package managers, or newer Windows-only utilities. "
         "Use call \"file.bat\" when running a batch file before another command. "
@@ -325,7 +327,8 @@ const struct tool_params_t run_cmd_params[] = {
         "busybox.exe is available for sh, find, grep, sed, awk, cat, head, tail, diff, patch, and tee. "
         "Use forward slashes in paths passed to BusyBox. "
         "For edits, run busybox.exe patch -p1 and pass a standard unified diff in stdin. "
-        "Prefer CRLF line endings; patch and tee write LF, so run busybox.exe unix2dos FILE afterwards on text files. "
+        "patch, tee, and sed -i write LF line endings; on CRLF text files run busybox.exe unix2dos FILE afterwards, "
+        "and verify the edit with grep, because patch can report success without applying when line endings differ. "
         "For whole-file writes, run busybox.exe tee FILE and pass the file content in stdin. "
         "For anything involving pipes, quoting, or regex patterns, run busybox.exe sh and pass the script via stdin instead of building cmd.exe pipelines. "
         // internet access via curl
@@ -839,7 +842,8 @@ const char *sysprompt =
     "Use standard whitespaces. "
     "Use short plain paragraphs. Use hyphen lists only when necessary. "
     "Recommend only commands and approaches that work in this Windows XP cmd.exe environment. "
-    "Be brief, practical, and return only the direct answer.";
+    "Be brief, practical, and return only the direct answer. "
+    "When multiple tool calls are needed and they do not depend on each other, issue them together in one turn.";
 
 int main(int argc, char **argv) {
     char buf[4096], *prompt, *out;

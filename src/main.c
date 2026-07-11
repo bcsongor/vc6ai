@@ -359,7 +359,7 @@ const struct tool_t tools[] = {
         "cmd",
         "Run one non-interactive command with Windows XP cmd.exe /C. "
         "Stdout and stderr are captured and [exit N] is appended. "
-        "Output over about 32 KB is trimmed; the full output is saved under C:\\Temp\\vc6ai. "
+        "Output over about 12 KB is trimmed; the full output is saved under C:\\Temp\\vc6ai. "
         "There is no timeout, so commands must not wait for input.",
         run_cmd_params
     },
@@ -444,8 +444,8 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd, const char *input) {
     CloseHandle(pi.hThread);
 
     // cap huge output: keep head + tail, save the full output to a file
-#define CAP_HEAD 8192
-#define CAP_TAIL 24576
+#define CAP_HEAD 4096
+#define CAP_TAIL 8192
 #define CAP_LIMIT (CAP_HEAD + CAP_TAIL + 512)
     
     if (outlen > CAP_LIMIT) {

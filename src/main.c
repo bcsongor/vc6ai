@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <io.h>
 #include <windows.h>
 
 #include <curl/curl.h>
@@ -883,13 +884,46 @@ char *trim(char *str) {
 //
 // MAIN AGENT LOOP
 
+#define SYSPROMPT_MAX 32768
+
 const char *sysprompt =
-    "You are VC6ai, an assistant for Windows XP cmd.exe. "
+    "You are VC6ai, an AI agent that gets things done on this machine. "
     "Use British English and plain ASCII in replies. "
     "Be concise and practical, using short paragraphs and lists only when useful. "
     "Suggest only Windows XP-compatible commands and methods. "
     "Run independent tool calls in parallel and batch related commands into one call. "
     "Do not re-read files or re-run commands whose output you already have unless something changed.";
+
+void convo_add_sysprompt(struct conversation_t *convo, struct config_t *config) {
+    char buf[SYSPROMPT_MAX];
+    struct _finddata_t fd;
+    long h;
+    int n;
+    FILE *f;
+
+    // add base sysprompt + cwd
+    n = _snprintf(buf, SYSPROMPT_MAX, "%s\nCurrent directory: %s\nCurrent directory contents:", sysprompt, config->cwd);
+    
+    // add cwd content
+    h = _findfirst("*", &fd);
+    do {
+        if (fd.name[0] == '.') continue;
+        n += _snprintf(buf + n, SYSPROMPT_MAX - n, " %s%s", fd.name, (fd.attrib & _A_SUBDIR) ? "/" : "");
+    } while (_findnext(h, &fd) == 0);
+    _findclose(h);
+
+    // add AGENTS.md contents if exists
+    f = fopen("AGENTS.md", "rb");
+    if (f) {
+        n += _snprintf(buf + n, SYSPROMPT_MAX - n, "\n\nInstructions from AGENTS.md:\n---\n");
+        n += fread(buf + n, 1, SYSPROMPT_MAX - n - 8, f);
+        n += _snprintf(buf + n, SYSPROMPT_MAX - n, "\n---");
+        fclose(f);
+    }
+    buf[n] = '\0';
+    
+    convo_add_text_message(convo, "system", buf);
+}
 
 int main(int argc, char **argv) {
     char buf[4096], *prompt, *out;
@@ -914,9 +948,7 @@ int main(int argc, char **argv) {
     printf("  available commands: /model, /stats, /new, /exit\n");
     
     convo_init(&convo, &config, tools);
-    // add env context to system prompt
-    _snprintf(buf, sizeof(buf), "%s\nCurrent directory: %s\n", sysprompt, config.cwd);
-    convo_add_text_message(&convo, "system", buf);
+    convo_add_sysprompt(&convo, &config);
 
     http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);

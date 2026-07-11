@@ -48,12 +48,15 @@ static void dbg(FILE **fp, const char *filename, const char *fmt, ...) {
 
 struct config_t {
     char cwd[MAX_PATH];
+
     // OpenRouter config
     char api_key[255];
     char model[255];
     char provider[255];
     char effort[12]; // max, xhigh, high, medium, low, minimial, none
     int zdr;
+
+    int context; // model's context window
 };
 
 const char *ini_file = "vc6ai.ini";
@@ -69,6 +72,7 @@ void config_init(struct config_t *config, const char *ini_file) {
     GetPrivateProfileStringA("OpenRouter", "Provider", "", config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 0, ini_path);
+    config->context = 0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -509,6 +513,7 @@ struct conversation_t {
     int tokens_in;
     int tokens_out;
     int tokens_cached;
+    int tokens_ctx;
     int requests;
     double cost;
 };
@@ -605,6 +610,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
     convo->tokens_in = 0;
     convo->tokens_out = 0;
     convo->tokens_cached = 0;
+    convo->tokens_ctx = 0;
     convo->requests = 0;
     convo->cost = 0.0;
 }
@@ -625,6 +631,7 @@ void convo_clear(struct conversation_t *convo) {
     convo->tokens_in = 0;
     convo->tokens_out = 0;
     convo->tokens_cached = 0;
+    convo->tokens_ctx = 0;
     convo->requests = 0;
     convo->cost = 0.0;
 }
@@ -701,8 +708,12 @@ int convo_add_response(struct conversation_t *convo, const char *json) {
     // accumulate session usage stats
     usage = cJSON_GetObjectItemCaseSensitive(res, "usage");
     if (usage) {
-        convo->tokens_in  += cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens")->valueint;
-        convo->tokens_out += cJSON_GetObjectItemCaseSensitive(usage, "completion_tokens")->valueint;
+        int ti = cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens")->valueint;
+        int to = cJSON_GetObjectItemCaseSensitive(usage, "completion_tokens")->valueint;
+
+        convo->tokens_in  += ti;
+        convo->tokens_out += to;
+        convo->tokens_ctx = ti + to;
         convo->cost += cJSON_GetObjectItemCaseSensitive(usage, "cost")->valuedouble;
         details = cJSON_GetObjectItemCaseSensitive(usage, "prompt_tokens_details");
         if (details) convo->tokens_cached += cJSON_GetObjectItemCaseSensitive(details, "cached_tokens")->valueint;
@@ -781,8 +792,35 @@ void openrouter_init(struct http_context_t *ctx, const char *api_key) {
     ctx->headers = curl_slist_append(ctx->headers, "HTTP-Referer: https://csxn.gr");
     ctx->headers = curl_slist_append(ctx->headers, "X-Title: VC6ai");
 
-    curl_easy_setopt(ctx->curl, CURLOPT_URL, "https://openrouter.ai/api/v1/chat/completions");
     curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers);
+}
+
+void openrouter_fetch_limits(struct http_context_t *ctx, struct config_t *config) {
+    char model[sizeof(config->model)], url[sizeof(model) * 2], *p;
+    CURLcode res;
+    cJSON *root, *data, *endpoints, *endpoint, *length;
+
+    ctx->reslen = 0;
+    if (ctx->res) ctx->res[0] = '\0';
+
+    // model variant suffixes like :nitro are not part of the endpoints URL
+    strcpy(model, config->model);
+    if ((p = strchr(model, ':')) != NULL) *p = '\0';
+    _snprintf(url, sizeof(url), "https://openrouter.ai/api/v1/models/%s/endpoints", model);
+
+    curl_easy_setopt(ctx->curl, CURLOPT_URL, url);
+    curl_easy_setopt(ctx->curl, CURLOPT_HTTPGET, 1L);
+    res = curl_easy_perform(ctx->curl);
+    if (res != CURLE_OK) return; // model context stays unknown
+
+    // get model's context window from response
+    root = cJSON_Parse(ctx->res);
+    data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    endpoints = cJSON_GetObjectItemCaseSensitive(data, "endpoints");
+    endpoint = cJSON_GetArrayItem(endpoints, 0);
+    length = cJSON_GetObjectItemCaseSensitive(endpoint, "context_length");
+    if (cJSON_IsNumber(length)) config->context = length->valueint;
+    cJSON_Delete(root);
 }
 
 CURLcode openrouter_request(struct http_context_t *ctx, struct conversation_t *convo) {
@@ -800,6 +838,7 @@ CURLcode openrouter_request(struct http_context_t *ctx, struct conversation_t *c
     ctx->reslen = 0;
     if (ctx->res) ctx->res[0] = '\0';
 
+    curl_easy_setopt(ctx->curl, CURLOPT_URL, "https://openrouter.ai/api/v1/chat/completions");
     curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDS, payload);
     res = curl_easy_perform(ctx->curl);
     free(payload);
@@ -867,6 +906,7 @@ int main(int argc, char **argv) {
     
     http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);
+    openrouter_fetch_limits(&http, &config);
 
     convo_init(&convo, &config, tools);
 
@@ -907,6 +947,7 @@ prompt:
                 term_reset();
                 printf("  ¯ current model: %s\n", config.model);
                 printf("    reasoning: %s\n", config.effort);
+                if (config.context > 0) printf("    context window: %d\n", config.context);
                 printf("    zero data retention: %s\n\n", config.zdr ? "enabled" : "disabled");
                 goto prompt;
             } else if (!strncmp(&prompt[1], "stats", 5)) {
@@ -915,6 +956,13 @@ prompt:
                 printf("    tokens in:  %d\n", convo.tokens_in);
                 printf("    tokens out: %d\n", convo.tokens_out);
                 printf("    cached in:  %d\n", convo.tokens_cached);
+                if (config.context > 0) {
+                    int pct = (int)(100.0 * convo.tokens_ctx / config.context + 0.5);
+                    printf("    context:    %d / %d (%d%% used)\n",
+                           convo.tokens_ctx, config.context, pct);
+                } else {
+                    printf("    context:    %d\n", convo.tokens_ctx);
+                }
                 printf("    cost:       $%.4f\n\n", convo.cost);
                 goto prompt;
             }

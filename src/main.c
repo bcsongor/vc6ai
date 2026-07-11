@@ -888,7 +888,8 @@ const char *sysprompt =
     "Use British English and plain ASCII in replies. "
     "Be concise and practical, using short paragraphs and lists only when useful. "
     "Suggest only Windows XP-compatible commands and methods. "
-    "Run independent tool calls in parallel.";
+    "Run independent tool calls in parallel and batch related commands into one call. "
+    "Do not re-read files or re-run commands whose output you already have unless something changed.";
 
 int main(int argc, char **argv) {
     char buf[4096], *prompt, *out;

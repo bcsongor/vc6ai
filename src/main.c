@@ -907,18 +907,19 @@ int main(int argc, char **argv) {
     term_reset();
     printf("\n\n");
 
+    printf("  current model: %s\n\n", config.model);
+
     term_color(C_FG_DARK_GRAY);
     printf("  available commands: /model, /stats, /new, /exit\n");
     
-    http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
-    openrouter_init(&http, config.api_key);
-    openrouter_fetch_limits(&http, &config);
-
     convo_init(&convo, &config, tools);
-
     // add env context to system prompt
     _snprintf(buf, sizeof(buf), "%s\nCurrent directory: %s\n", sysprompt, config.cwd);
     convo_add_text_message(&convo, "system", buf);
+
+    http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
+    openrouter_init(&http, config.api_key);
+    openrouter_fetch_limits(&http, &config);
 
     for (;;) {
 prompt:

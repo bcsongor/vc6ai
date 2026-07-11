@@ -1,0 +1,18 @@
+THIRD-PARTY NOTICES
+
+This project bundles the following third-party software. These components
+are NOT covered by this project's MIT licence; each is distributed under
+its own terms.
+
+1. BusyBox for Windows (busybox-w32)
+   Location: dep\busybox-1.38\busybox.exe
+   Version:  v1.38.0-FRP-6075-g169694ebd (unmodified upstream build)
+   Licence:  GNU General Public License v2 (see dep\busybox-1.38\LICENSE)
+   Source:   https://github.com/rmyorston/busybox-w32
+             https://frippery.org/busybox/
+
+2. curl / libcurl
+   Location: dep\curl-8.20\
+   Version:  8.20
+   Licence:  curl licence (MIT-like, see dep\curl-8.20\COPYING)
+   Source:   https://curl.se/

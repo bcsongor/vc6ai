@@ -16,3 +16,13 @@ its own terms.
    Version:  8.20
    Licence:  curl licence (MIT-like, see dep\curl-8.20\COPYING)
    Source:   https://curl.se/
+
+3. jq
+   Location: dep\jq-1.8.2\jq.exe
+   Version:  1.8.2
+   Licence:  MIT, with bundled components under other permissive licences
+             (see dep\jq-1.8.2\COPYING)
+   Bundled Oniguruma: BSD 2-Clause licence
+             (see dep\jq-1.8.2\COPYING.oniguruma)
+   Source:   https://jqlang.org/
+             https://github.com/jqlang/jq

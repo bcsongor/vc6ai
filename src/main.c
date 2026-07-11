@@ -339,6 +339,7 @@ const struct tool_params_t run_cmd_params[] = {
         "Do not retry a failed patch unchanged or convert CRLF before patching. "
         "patch, tee, and sed -i write LF, so restore existing CRLF files with unix2dos. "
         "Use tee and stdin for whole-file writes. "
+        "jq.exe is available for parsing and transforming JSON; prefer it to grep or sed for JSON; use jq -r when plain-text output is needed. "
         "curl.exe is available for networking. If EXA_API_KEY is set, use Exa to search and fetch web pages. "
         "Post JSON on stdin to https://api.exa.ai/search or https://api.exa.ai/contents with curl.exe -s, Content-Type and x-api-key headers, and -d @-. "
         "Use /search to discover pages; nest highlights or text under contents. Use /contents to fetch known URLs; highlights and text are top-level. "

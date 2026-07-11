@@ -60,6 +60,9 @@ struct config_t {
     int datacoll;
     int zdr;
 
+    // Exa config
+    char exa_key[APIKEY_MAX];
+
     int context; // model's context window
 };
 
@@ -77,6 +80,8 @@ void config_init(struct config_t *config, const char *ini_file) {
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
     config->datacoll = GetPrivateProfileIntA("OpenRouter", "DataCollection", 0, ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 0, ini_path);
+    GetPrivateProfileStringA("Exa", "ApiKey", "", config->exa_key, APIKEY_MAX, ini_path);
+    if (config->exa_key[0]) SetEnvironmentVariableA("EXA_API_KEY", config->exa_key);
     config->context = 0;
 }
 
@@ -323,34 +328,27 @@ const struct tool_params_t run_cmd_params[] = {
     {
         "command",
         "string",
-        // general
-        "Exact command to pass to Windows XP cmd.exe /C. "
-        "Stdout and stderr are captured and the exit code is appended as [exit N]. "
-        "Output beyond about 32 KB is trimmed to head and tail; the full output is saved to a file under C:\\Temp\\vc6ai. "
-        "There is no timeout, so never run commands that wait for input. "
-        "Use one complete command; combine related steps with && to avoid extra tool calls. "
-        "Do not use PowerShell, Python, Perl, package managers, or newer Windows-only utilities. "
+        "Command passed to Windows XP cmd.exe /C, limited to about 4000 characters. "
+        "Use one command per call and join dependent steps with &&; run independent calls in parallel. "
         "Use call \"file.bat\" when running a batch file before another command. "
-        "Keep commands under about 4000 characters. "
-        // file reads and manipulation via busybox 
-        "busybox.exe is available for sh, find, grep, sed, awk, cat, head, tail, diff, patch, and tee. "
-        "Use forward slashes in paths passed to BusyBox. "
-        "BusyBox applets accept only short POSIX options; GNU long options such as --include fail. "
-        "Grep and find only named files or source directories, and cap output with head. "
-        "For edits, run busybox.exe patch -p1 and pass a standard unified diff in stdin. "
-        "patch, tee, and sed -i write LF line endings; on CRLF text files run busybox.exe unix2dos FILE afterwards, "
-        "and verify the edit with grep, because patch can report success without applying when line endings differ. "
-        "For whole-file writes, run busybox.exe tee FILE and pass the file content in stdin. "
-        "For anything involving pipes, quoting, or regex patterns, run busybox.exe sh and pass the script via stdin instead of building cmd.exe pipelines. "
-        // internet access via curl
-        "curl.exe is available for internet access.",
+        "Use only Windows XP-compatible tools; do not use PowerShell, Python, Perl, package managers, or newer Windows commands. "
+        "busybox.exe provides sh, find, grep, sed, awk, cat, head, tail, diff, patch, tee, and unix2dos. "
+        "Use forward-slash paths and short POSIX options with BusyBox; GNU long options such as --include are unsupported. Scope searches and cap their output. "
+        "For pipes, regexes, or difficult quoting, run busybox.exe sh and pass the script in stdin. "
+        "For edits, pass a unified diff to busybox.exe patch -p1 in stdin and verify the result; malformed hunks can exit successfully without applying. "
+        "Do not retry a failed patch unchanged or convert CRLF before patching. "
+        "patch, tee, and sed -i write LF, so restore existing CRLF files with unix2dos. "
+        "Use tee and stdin for whole-file writes. "
+        "curl.exe is available for networking. If EXA_API_KEY is set, use Exa to search and fetch web pages. "
+        "Post JSON on stdin to https://api.exa.ai/search or https://api.exa.ai/contents with curl.exe -s, Content-Type and x-api-key headers, and -d @-. "
+        "Use /search to discover pages; nest highlights or text under contents. Use /contents to fetch known URLs; highlights and text are top-level. "
+        "Prefer highlights for lookups, or text with maxCharacters for deeper reading. Set maxAgeHours to 0 only when fresh content matters.",
         1
     },
     {
         "stdin",
         "string",
-        "Optional text to send verbatim to the command's standard input. "
-        "Use this for patches and whole-file writes instead of shell quoting.",
+        "Optional verbatim standard input. Use it for shell scripts, patches, JSON, and whole-file writes instead of command-line quoting.",
         0
     },
     {NULL, NULL, NULL, 0}
@@ -358,9 +356,10 @@ const struct tool_params_t run_cmd_params[] = {
 const struct tool_t tools[] = {
     {
         "cmd",
-        "Run one non-interactive Windows XP cmd.exe command. "
-        "Use this for file operations, builds, program execution, system queries, networking, "
-        "and simple automation. Do not use it for conversation.",
+        "Run one non-interactive command with Windows XP cmd.exe /C. "
+        "Stdout and stderr are captured and [exit N] is appended. "
+        "Output over about 32 KB is trimmed; the full output is saved under C:\\Temp\\vc6ai. "
+        "There is no timeout, so commands must not wait for input.",
         run_cmd_params
     },
     {NULL, NULL, NULL}
@@ -884,14 +883,11 @@ char *trim(char *str) {
 // MAIN AGENT LOOP
 
 const char *sysprompt =
-    "You are VC6ai, a helpful AI agent running inside Windows XP cmd.exe. "
-    "Use British English spelling. "
-    "Plain ASCII text only. No Unicode. No smart quotes, emdashes, endashes, and degree symbols. "
-    "Use standard whitespaces. "
-    "Use short plain paragraphs. Use hyphen lists only when necessary. "
-    "Recommend only commands and approaches that work in this Windows XP cmd.exe environment. "
-    "Be brief, practical, and return only the direct answer. "
-    "When multiple tool calls are needed and they do not depend on each other, issue them together in one turn.";
+    "You are VC6ai, an assistant for Windows XP cmd.exe. "
+    "Use British English and plain ASCII in replies. "
+    "Be concise and practical, using short paragraphs and lists only when useful. "
+    "Suggest only Windows XP-compatible commands and methods. "
+    "Run independent tool calls in parallel.";
 
 int main(int argc, char **argv) {
     char buf[4096], *prompt, *out;

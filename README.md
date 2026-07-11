@@ -23,14 +23,14 @@ One tool: run a command.
 
 A few (daft) self-imposed constraints:
 
-- ~~Keep it under 1000 lines~~ of C89ish (VC6 is not known for standards conformity) (update: turns out it's better to have more lines and prompt caching than a £1000 bill)
+- ~~Keep it under 1000 lines~~ of C89ish (VC6 is not known for standards conformity). *[update: turns out it's better to have more lines and prompt caching than a £1000 bill]*
 - One tool only: the model can run a `cmd.exe` command and nothing else.
 - It has to run on a toaster i.e. my Windows Server 2003 R2 VM.
-- No LLMs used for development, every line is handwritten, bringing joy.
+- No LLMs for *most* of development, *nearly* every line of code is handwritten, bringing joy. *[update: the sys prompt and tool definition are LLM written, and in my defence, writing instructions for the machine myself sounded suspiciously like work]*
 
 ## Getting it running
 
-You'll need Visual C++ 6 to build it, libcurl (provided) and an OpenRouter API key.
+You'll need Visual C++ 6 to build it, libcurl (provided) and an OpenRouter API key. An Exa API key is optional for web search and fetching.
 
 Copy `vc6ai.sample.ini` to `vc6ai.ini` and set the OpenRouter API key.
 
@@ -42,12 +42,17 @@ Provider=Fireworks
 Effort=xhigh
 DataCollection=0
 ZeroDataRetention=0
+
+[Exa]
+ApiKey=your-exa-key
 ```
 
 Any cheap current-gen model does the job (works extremely well with GLM-5.2!).
 `Provider` is optional and pins a single provider on OpenRouter (fallbacks get disabled). `Effort` sets the reasoning effort.
 `DataCollection=0` excludes providers that may store prompts or train on them.
 `ZeroDataRetention=1` is stricter and permits only endpoints that retain no prompts at all. It may exclude endpoints that support prompt caching.
+
+You can get an Exa API key [here](https://dashboard.exa.ai/api-keys). When configured, the model can use Exa to discover pages and fetch clean content from known URLs.
 
 Build it in VC6, run the exe and it'll ask you for a prompt. Sometimes it wanders off, but it gets there often enough to be genuinely useful, which surprised me for something this small.
 

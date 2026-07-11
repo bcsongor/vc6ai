@@ -656,15 +656,29 @@ void convo_add_tool_message(struct conversation_t *convo, const char *id, const 
     convo->content = content->valuestring;
 }
 
-void convo_strip_reasoning(struct conversation_t *convo) {
-    cJSON *msg, *role;
-
+void convo_compact(struct conversation_t *convo) {
+#define TOOL_KEEP 1024
+    cJSON *msg, *role, *content;
+    char buf[TOOL_KEEP + 64];
+    
     cJSON_ArrayForEach(msg, convo->messages) {
         role = cJSON_GetObjectItemCaseSensitive(msg, "role");
-        if (!cJSON_IsString(role) || strcmp(role->valuestring, "assistant")) continue;
-        cJSON_DeleteItemFromObject(msg, "reasoning");
-        cJSON_DeleteItemFromObject(msg, "reasoning_details");
-        cJSON_DeleteItemFromObject(msg, "refusal");
+        if (!cJSON_IsString(role)) continue;
+
+        if (!strcmp(role->valuestring, "assistant")) {
+            cJSON_DeleteItemFromObject(msg, "reasoning");
+            cJSON_DeleteItemFromObject(msg, "reasoning_details");
+            cJSON_DeleteItemFromObject(msg, "refusal");
+        } else if (!strcmp(role->valuestring, "tool")) {
+            content = cJSON_GetObjectItemCaseSensitive(msg, "content");
+            if (!cJSON_IsString(content)) continue;
+            if (strlen(content->valuestring) <= TOOL_KEEP + 64) continue;
+
+            lstrcpynA(buf, content->valuestring, TOOL_KEEP + 1);
+            strcat(buf, "\n[... output pruned from history ...]");
+
+            cJSON_ReplaceItemInObject(msg, "content", cJSON_CreateString(buf));
+        }
     }
 }
 
@@ -980,8 +994,11 @@ prompt:
             goto prompt;
         }
 
-        // drop reasoning traces from earlier turns to shrink the payload
-        convo_strip_reasoning(&convo);
+        // compact earlier turns to shring payload and save tokens:
+        // - drop reasoning traces
+        // - truncate old tool outputs
+        // TODO: compact convo if at 80% of context
+        convo_compact(&convo);
 
         // store user message
         convo_add_text_message(&convo, "user", prompt);

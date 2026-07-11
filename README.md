@@ -4,7 +4,7 @@ An AI agent that runs on Windows XP et al.
 
 <img width="797" height="600" alt="image" src="https://github.com/user-attachments/assets/cd0d9eb3-d3fe-4c6a-83e5-b091bfd4597d" />
 
-I built this over a weekend. It's about 900 lines of C, it compiles with Visual C++ 6 and it runs happily on a Windows Server 2003 box that has no business running anything from this decade. It talks to an LLM and it has exactly one tool.
+I built this over a weekend. It's about 1100 lines of C, it compiles with Visual C++ 6 and it runs happily on a Windows Server 2003 box that has no business running anything from this decade. It talks to an LLM and it has exactly one tool.
 
 ## Why
 
@@ -23,7 +23,7 @@ One tool: run a command.
 
 A few (daft) self-imposed constraints:
 
-- Keep it under 1000 lines of C89ish (VC6 is not known for standards conformity)
+- ~~Keep it under 1000 lines~~ of C89ish (VC6 is not known for standards conformity) (update: turns out it's better to have more lines and prompt caching than a £1000 bill)
 - One tool only: the model can run a `cmd.exe` command and nothing else.
 - It has to run on a toaster i.e. my Windows Server 2003 R2 VM.
 - No LLMs used for development, every line is handwritten, bringing joy.
@@ -48,6 +48,16 @@ Any cheap current-gen model does the job (works extremely well with GLM-5.2!).
 
 Build it in VC6, run the exe and it'll ask you for a prompt. Sometimes it wanders off, but it gets there often enough to be genuinely useful, which surprised me for something this small.
 
-There are four slash commands: `/model`, `/stats`, `/new` and `/exit`. Prefix a line with `!` to run a command via cmd.exe. Ctrl-C aborts a request that's taking too long.
+Slash commands:
+
+| Command | What it does |
+| --- | --- |
+| `/model` | Show the current model |
+| `/model <name>` | Switch models mid-session, e.g. `/model z-ai/glm-5.2` |
+| `/stats` | Show session stats |
+| `/new` | Start a fresh conversation |
+| `/exit` | Quit |
+
+Prefix a line with `!` to run a command via cmd.exe. Ctrl-C aborts a request that's taking too long.
 
 *Enjoy!*

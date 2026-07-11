@@ -46,12 +46,15 @@ static void dbg(FILE **fp, const char *filename, const char *fmt, ...) {
 //
 // CONFIGURATION
 
+#define APIKEY_MAX 128
+#define MODEL_MAX 255
+
 struct config_t {
     char cwd[MAX_PATH];
 
     // OpenRouter config
-    char api_key[255];
-    char model[255];
+    char api_key[APIKEY_MAX];
+    char model[MODEL_MAX];
     char provider[255];
     char effort[12]; // max, xhigh, high, medium, low, minimial, none
     int zdr;
@@ -67,8 +70,8 @@ void config_init(struct config_t *config, const char *ini_file) {
     GetCurrentDirectoryA(MAX_PATH, config->cwd);
     _snprintf(ini_path, MAX_PATH, "%s\\%s", config->cwd, ini_file);
 
-    GetPrivateProfileStringA("OpenRouter", "ApiKey", "", config->api_key, sizeof(config->api_key), ini_path);
-    GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, sizeof(config->model), ini_path);
+    GetPrivateProfileStringA("OpenRouter", "ApiKey", "", config->api_key, APIKEY_MAX, ini_path);
+    GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, MODEL_MAX, ini_path);
     GetPrivateProfileStringA("OpenRouter", "Provider", "", config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 0, ini_path);
@@ -330,6 +333,8 @@ const struct tool_params_t run_cmd_params[] = {
         // file reads and manipulation via busybox 
         "busybox.exe is available for sh, find, grep, sed, awk, cat, head, tail, diff, patch, and tee. "
         "Use forward slashes in paths passed to BusyBox. "
+        "BusyBox applets accept only short POSIX options; GNU long options such as --include fail. "
+        "Grep and find only named files or source directories, and cap output with head. "
         "For edits, run busybox.exe patch -p1 and pass a standard unified diff in stdin. "
         "patch, tee, and sed -i write LF line endings; on CRLF text files run busybox.exe unix2dos FILE afterwards, "
         "and verify the edit with grep, because patch can report success without applying when line endings differ. "
@@ -602,38 +607,24 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
         cJSON_AddItemToObject(root, "reasoning", reasoning);
     }
 
+    memset(convo, 0, sizeof(struct conversation_t));
     convo->root = root;
     convo->messages = messages;
-    convo->content = NULL;
-    convo->pending_tool_msg = NULL;
-
-    convo->tokens_in = 0;
-    convo->tokens_out = 0;
-    convo->tokens_cached = 0;
-    convo->tokens_ctx = 0;
-    convo->requests = 0;
-    convo->cost = 0.0;
 }
 
 void convo_clear(struct conversation_t *convo) { 
-    cJSON *messages, *system;
+    cJSON *root = convo->root, *messages, *system;
 
     system = cJSON_DetachItemFromArray(convo->messages, 0);
-    cJSON_DeleteItemFromObject(convo->root, "messages");
+    cJSON_DeleteItemFromObject(root, "messages");
     
     messages = cJSON_CreateArray();
     cJSON_AddItemToArray(messages, system);
-    cJSON_AddItemToObject(convo->root, "messages", messages);
+    cJSON_AddItemToObject(root, "messages", messages);
 
+    memset(convo, 0, sizeof(struct conversation_t));
+    convo->root = root;
     convo->messages = messages;
-    convo->content = NULL;
-    convo->pending_tool_msg = NULL;
-    convo->tokens_in = 0;
-    convo->tokens_out = 0;
-    convo->tokens_cached = 0;
-    convo->tokens_ctx = 0;
-    convo->requests = 0;
-    convo->cost = 0.0;
 }
 
 void convo_add_text_message(struct conversation_t *convo, const char *role, const char *content_str) {
@@ -784,7 +775,7 @@ void convo_cleanup(struct conversation_t *convo) {
 // OPENROUTER INTERACTIONS
 
 void openrouter_init(struct http_context_t *ctx, const char *api_key) {
-    char buf[255];
+    char buf[APIKEY_MAX + 32];
     
     _snprintf(buf, sizeof(buf), "Authorization: Bearer %s", api_key);
     ctx->headers = curl_slist_append(ctx->headers, buf);
@@ -796,7 +787,7 @@ void openrouter_init(struct http_context_t *ctx, const char *api_key) {
 }
 
 void openrouter_fetch_limits(struct http_context_t *ctx, struct config_t *config) {
-    char model[sizeof(config->model)], url[sizeof(model) * 2], *p;
+    char model[MODEL_MAX], url[MODEL_MAX + 64], *p;
     CURLcode res;
     cJSON *root, *data, *endpoints, *endpoint, *length;
 
@@ -944,6 +935,14 @@ prompt:
                 convo_clear(&convo);
                 goto prompt;
             } else if (!strncmp(&prompt[1], "model", 5)) {
+                char *arg = trim(&prompt[6]);
+                if (*arg) {
+                    // switch model
+                    lstrcpynA(config.model, arg, MODEL_MAX);
+                    cJSON_ReplaceItemInObject(convo.root, "model", cJSON_CreateString(config.model));
+                    config.context = 0;
+                    openrouter_fetch_limits(&http, &config);
+                }
                 term_reset();
                 printf("  ¯ current model: %s\n", config.model);
                 printf("    reasoning: %s\n", config.effort);

@@ -328,7 +328,7 @@ const struct tool_params_t run_cmd_params[] = {
     {
         "command",
         "string",
-        "Command passed to Windows XP cmd.exe /C, limited to about 4000 characters. "
+        "Command passed to Windows XP cmd.exe /D /C, limited to about 4000 characters. "
         "Use one command per call and join dependent steps with &&; run independent calls in parallel. "
         "Use call \"file.bat\" when running a batch file before another command. "
         "Use only Windows XP-compatible tools; do not use PowerShell, Python, Perl, package managers, or newer Windows commands. "
@@ -357,7 +357,7 @@ const struct tool_params_t run_cmd_params[] = {
 const struct tool_t tools[] = {
     {
         "cmd",
-        "Run one non-interactive command with Windows XP cmd.exe /C. "
+        "Run one non-interactive command with Windows XP cmd.exe /D /C. "
         "Stdout and stderr are captured and [exit N] is appended. "
         "Output over about 12 KB is trimmed; the full output is saved under C:\\Temp\\vc6ai. "
         "There is no timeout, so commands must not wait for input.",
@@ -399,7 +399,7 @@ char *tool_handle_run_cmd(const char *cwd, const char *cmd, const char *input) {
     si.hStdError = wr;
 
     cmdline = malloc(strlen(cmd) + 16);
-    sprintf(cmdline, "cmd.exe /C %s", cmd);
+    sprintf(cmdline, "cmd.exe /D /C %s", cmd);
 
     ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi);
     free(cmdline);

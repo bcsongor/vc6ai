@@ -580,6 +580,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
 
     cJSON_AddStringToObject(root, "model", config->model);
     cJSON_AddStringToObject(root, "session_id", session_id());
+    cJSON_AddStringToObject(root, "prompt_cache_key", session_id());
 
     // enable prompt caching
     cache = cJSON_CreateObject();

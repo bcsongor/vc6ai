@@ -40,11 +40,14 @@ ApiKey=sk-or-v1-...
 Model=deepseek/deepseek-v4-flash
 Provider=Fireworks
 Effort=xhigh
-ZeroDataRetention=1
+DataCollection=0
+ZeroDataRetention=0
 ```
 
 Any cheap current-gen model does the job (works extremely well with GLM-5.2!).
 `Provider` is optional and pins a single provider on OpenRouter (fallbacks get disabled). `Effort` sets the reasoning effort.
+`DataCollection=0` excludes providers that may store prompts or train on them.
+`ZeroDataRetention=1` is stricter and permits only endpoints that retain no prompts at all. It may exclude endpoints that support prompt caching.
 
 Build it in VC6, run the exe and it'll ask you for a prompt. Sometimes it wanders off, but it gets there often enough to be genuinely useful, which surprised me for something this small.
 

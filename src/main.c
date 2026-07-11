@@ -57,6 +57,7 @@ struct config_t {
     char model[MODEL_MAX];
     char provider[255];
     char effort[12]; // max, xhigh, high, medium, low, minimial, none
+    int datacoll;
     int zdr;
 
     int context; // model's context window
@@ -74,6 +75,7 @@ void config_init(struct config_t *config, const char *ini_file) {
     GetPrivateProfileStringA("OpenRouter", "Model", "deepseek/deepseek-v4-flash", config->model, MODEL_MAX, ini_path);
     GetPrivateProfileStringA("OpenRouter", "Provider", "", config->provider, sizeof(config->provider), ini_path);
     GetPrivateProfileStringA("OpenRouter", "Effort", "none", config->effort, sizeof(config->effort), ini_path);
+    config->datacoll = GetPrivateProfileIntA("OpenRouter", "DataCollection", 0, ini_path);
     config->zdr = GetPrivateProfileIntA("OpenRouter", "ZeroDataRetention", 0, ini_path);
     config->context = 0;
 }
@@ -590,6 +592,7 @@ void convo_init(struct conversation_t *convo, struct config_t *config, const str
 
     // add provider section
     provider = cJSON_CreateObject();
+    if (!config->datacoll) cJSON_AddStringToObject(provider, "data_collection", "deny");
     if (config->zdr) cJSON_AddBoolToObject(provider, "zdr", cJSON_True); // zero data retention
     if (strlen(config->provider)) {
         cJSON *order = cJSON_CreateArray();
@@ -961,6 +964,7 @@ prompt:
                 printf("  ¯ current model: %s\n", config.model);
                 printf("    reasoning: %s\n", config.effort);
                 if (config.context > 0) printf("    context window: %d\n", config.context);
+                printf("    data collection: %s\n", config.datacoll ? "allowed" : "denied");
                 printf("    zero data retention: %s\n\n", config.zdr ? "enabled" : "disabled");
                 goto prompt;
             } else if (!strncmp(&prompt[1], "stats", 5)) {

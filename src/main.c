@@ -950,7 +950,7 @@ int main(int argc, char **argv) {
     convo_init(&convo, &config, tools);
     convo_add_sysprompt(&convo, &config);
 
-    http_init(&http, 300L); // 5 minute timeout to allow for longer thinking sessions
+    http_init(&http, 600L); // 10 minute timeout to allow for longer thinking sessions
     openrouter_init(&http, config.api_key);
     openrouter_fetch_limits(&http, &config);
 

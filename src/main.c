@@ -1,10 +1,12 @@
+#define _WIN32_WINNT 0x0500 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
-#include <io.h>
 #include <windows.h>
+#include <io.h>
 
 #include <curl/curl.h>
 #include "cJSON.h"
@@ -361,86 +363,115 @@ const struct tool_t tools[] = {
         "Run one non-interactive command with Windows XP cmd.exe /D /C. "
         "Stdout and stderr are captured and [exit N] is appended. "
         "Output over about 12 KB is trimmed; the full output is saved under C:\\Temp\\vc6ai. "
-        "There is no timeout, so commands must not wait for input.",
+        "Commands are killed after 3 minutes (exit 124) and must not wait for input; exit 130 means Ctrl-C.",
         run_cmd_params
     },
     {NULL, NULL, NULL}
 };
 
 char *tool_handle_run_cmd(const char *cwd, const char *cmd, const char *input) {
+    // rough idea is that we create pipes to read cmd.exe's stdout/err and pipe in stdin.
+    // we start cmd.exe tool call suspended, add it to the job, resume and poll it.
+    // we terminate the job on timeout or interrupt (Ctrl-C).
+
+#define CMD_TIMEOUT_MS 3*60*1000
+#define EXIT_TIMEOUT   124
+#define EXIT_INTERRUPT 130
+
+    // hacky macro to check if there's anything on the pipe, read if so.
+    // we only read once so a noisy command won't block
+#define DRAIN_OUTPUT(outread, out, outsize, outlen) do {                               \
+    DWORD drained;                                                                     \
+    if (PeekNamedPipe((outread), NULL, 0, NULL, &drained, NULL) && drained) {          \
+        if ((outlen) + drained + 32 > (outsize)) {                                     \
+            while ((outlen) + drained + 32 > (outsize)) (outsize) *= 2;                \
+            (out) = realloc((out), (outsize));                                         \
+        }                                                                              \
+        if (ReadFile((outread), (out) + (outlen), drained, &drained, NULL) && drained) \
+            (outlen) += drained;                                                       \
+    }                                                                                  \
+} while (0)
+
     SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-    HANDLE rd = NULL, wr = NULL, in_rd = NULL, in_wr = NULL;
+    HANDLE outread, outwrite, inread, inwrite, job;
     STARTUPINFO si = {0};
     PROCESS_INFORMATION pi = {0};
     char *cmdline, buf[1024], *out;
     size_t outsize = 4096, outlen = 0;
-    DWORD readlen, exitcode, written, in_len, in_pos;
+    DWORD readlen, exitcode = STILL_ACTIVE, started;
     BOOL ok;
 
-    ok = CreatePipe(&rd, &wr, &sa, 0);
-    if (!ok) return strdup("CreatePipe stdout failed\n");
-
-    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    CreatePipe(&outread, &outwrite, &sa, 0);
+    SetHandleInformation(outread, HANDLE_FLAG_INHERIT, 0);
 
     if (input) {
-        ok = CreatePipe(&in_rd, &in_wr, &sa, 0);
-        if (!ok) {
-            CloseHandle(rd);
-            CloseHandle(wr);
-            return strdup("CreatePipe stdin failed\n");
-        }
-        
-        SetHandleInformation(in_wr, HANDLE_FLAG_INHERIT, 0);
+        CreatePipe(&inread, &inwrite, &sa, strlen(input) + 1);
+        SetHandleInformation(inwrite, HANDLE_FLAG_INHERIT, 0);
     }
 
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = input ? in_rd : GetStdHandle(STD_INPUT_HANDLE);
-    si.hStdOutput = wr;
-    si.hStdError = wr;
+    si.hStdInput = input ? inread : GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = outwrite;
+    si.hStdError = outwrite;
 
     cmdline = malloc(strlen(cmd) + 16);
     sprintf(cmdline, "cmd.exe /D /C %s", cmd);
 
-    ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, cwd, &si, &pi);
+    started = GetTickCount();
+
+    job = CreateJobObjectA(NULL, NULL);
+
+    ok = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, cwd, &si, &pi);
     free(cmdline);
-    CloseHandle(wr);
+    CloseHandle(outwrite);
+    if (input) CloseHandle(inread);
+
     if (!ok) {
+        if (input) CloseHandle(inwrite);
+        if (job) CloseHandle(job);
+        CloseHandle(outread);
+
         sprintf(buf, "CreateProcessA failed: %d\n", GetLastError());
-        if (input) CloseHandle(in_wr);
-        CloseHandle(rd);
         return strdup(buf);
     }
 
-    // send input
+    AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
+
     if (input) {
-        in_len = (DWORD)strlen(input);
-        in_pos = 0;
-
-        while (in_pos < in_len) {
-            ok = WriteFile(in_wr, input + in_pos, in_len - in_pos, &written, NULL);
-            if (!ok || !written) break;
-            in_pos += written;
-        }
-
-        CloseHandle(in_wr);
+        WriteFile(inwrite, input, strlen(input), &readlen, NULL);
+        CloseHandle(inwrite);
     }
 
-    // read output
     out = malloc(outsize);
-    while (ReadFile(rd, buf, sizeof(buf), &readlen, NULL) && readlen > 0) {
-        // always keep some room for the exit code (32 chars)
-        if (outsize < outlen + readlen + 32) {
-            while (outsize < outlen + readlen + 32) outsize *= 2;
-            out = realloc(out, outsize);
-        }
-        memcpy(out + outlen, buf, readlen);
-        outlen += readlen;
-    }
-    CloseHandle(rd);
+    for (;;) {
+        DRAIN_OUTPUT(outread, out, outsize, outlen);
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    GetExitCodeProcess(pi.hProcess, &exitcode);
+        // check if cmd.exe exited
+        if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) break;
+
+        if (GetTickCount() - started >= CMD_TIMEOUT_MS) {
+            exitcode = EXIT_TIMEOUT;
+        } else if (term_interrupted()) {
+            term_interrupt_reset();
+            exitcode = EXIT_INTERRUPT;
+        }
+        if (exitcode != STILL_ACTIVE) {
+            // interrupt or timeout: terminate cmd.exe and all child processes 
+            TerminateJobObject(job, exitcode);
+            break;
+        }
+
+        Sleep(10);
+    }
+
+    DRAIN_OUTPUT(outread, out, outsize, outlen);
+    CloseHandle(outread);
+
+    if (exitcode == STILL_ACTIVE) GetExitCodeProcess(pi.hProcess, &exitcode);
+
+    CloseHandle(job);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
